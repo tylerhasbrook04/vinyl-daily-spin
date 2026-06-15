@@ -746,7 +746,9 @@ async function fetchArtFromItunes(title, artist) {
     };
 
     const findBest = (results) => {
-      const scored = results.map(r => ({ r, s: score(r) })).filter(x => x.s >= 5);
+      // Exact title (>=10) is enough alone.
+      // Partial title (5) requires artist correlation (+2) → min 7.
+      const scored = results.map(r => ({ r, s: score(r) })).filter(x => x.s >= 7);
       if (!scored.length) return null;
       return scored.sort((a, b) => b.s - a.s)[0].r;
     };
@@ -760,6 +762,28 @@ async function fetchArtFromItunes(title, artist) {
 
     if (!match) return null;
     return match.artworkUrl100 || match.artworkUrl60 || null;
+  } catch(e) { return null; }
+}
+
+// ─── MUSICBRAINZ ART FETCH (fallback) ────────────────────────────────────────
+async function fetchArtFromMusicBrainz(title, artist) {
+  try {
+    const q = `artist:"${artist.replace(/"/g,'')}" AND release:"${title.replace(/"/g,'')}"`;
+    const resp = await fetch(
+      `https://musicbrainz.org/ws/2/release/?query=${encodeURIComponent(q)}&fmt=json&limit=5`,
+      { headers: { 'User-Agent': 'VinylDailySpin/1.0 (music-journal-app)' } }
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (!data.releases || !data.releases.length) return null;
+    // Try each release until one has cover art
+    for (const release of data.releases.slice(0, 3)) {
+      try {
+        const artResp = await fetch(`https://coverartarchive.org/release/${release.id}/front-500`);
+        if (artResp.ok) return artResp.url; // follows redirect; .url = final image URL
+      } catch(e) {}
+    }
+    return null;
   } catch(e) { return null; }
 }
 
@@ -836,7 +860,32 @@ async function bulkFetchArt() {
       if (i + CHUNK < missing.length) await new Promise(r => setTimeout(r, 200));
     }
 
-    // 5. Write all found URLs to sheet in one batch
+    // 5. MusicBrainz sequential fallback for albums iTunes missed
+    const notFound = missing.filter(a => {
+      const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
+      const artist = (a.Artist||'').trim();
+      return !_artCache[`${title}|${artist}`];
+    });
+    if (notFound.length) {
+      statusEl.textContent = `iTunes: ${found.length} found. Trying MusicBrainz for ${notFound.length} remaining…`;
+      for (let i = 0; i < notFound.length; i++) {
+        const a = notFound[i];
+        const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
+        const artist = (a.Artist||'').trim();
+        const url = await fetchArtFromMusicBrainz(title, artist);
+        if (url) {
+          const key = `${title}|${artist}`;
+          _artCache[key] = url;
+          persistArtUrl(key, url);
+          found.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
+        }
+        countEl.textContent = `MusicBrainz: ${i+1}/${notFound.length} · total found: ${found.length}`;
+        // MusicBrainz rate limit: 1 req/sec
+        await new Promise(r => setTimeout(r, 1100));
+      }
+    }
+
+    // 6. Write all found URLs to sheet in one batch
     if (found.length) {
       statusEl.textContent = `Writing ${found.length} URLs to sheet…`;
       const BATCH = 500;
