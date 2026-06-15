@@ -716,44 +716,45 @@ async function testArtApi() {
   }
 }
 
+// ─── SHARED ART HELPERS ──────────────────────────────────────────────────────
+const _artNorm = s => (s||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
+const _artStops = new Set(['the','a','an','and','or','of','in','is','to','da','el','les','de']);
+// First significant word — skips stop words so "The Notorious B.I.G." → "notorious"
+const _artFirstSig = nal => nal.split(' ').find(w => w.length > 2 && !_artStops.has(w)) || nal.split(' ')[0];
+const _artSigWords = s => s.split(' ').filter(w => w.length > 2 && !_artStops.has(w));
+const _artOverlap = (a, b) => {
+  const aw = _artSigWords(a); if (!aw.length) return 0;
+  const bSet = new Set(_artSigWords(b));
+  return aw.filter(w => bSet.has(w)).length / aw.length;
+};
+const _artTitleScore = (ntl, rt) => {
+  if (rt === ntl) return 10;
+  const ov = _artOverlap(ntl, rt);
+  if (ov >= 0.8) return 8;
+  if (ov >= 0.6) return 5;
+  if (rt.includes(ntl) || ntl.includes(rt)) return 5;
+  return 0;
+};
+const _artArtistScore = (nal, ra) => {
+  if (ra === nal) return 4;
+  const fw = _artFirstSig(nal);
+  if (fw.length > 2 && ra.includes(fw)) return 2;
+  const rfw = _artFirstSig(ra);
+  if (rfw.length > 2 && nal.includes(rfw)) return 2;
+  return 0;
+};
+
 // ─── ITUNES ART FETCH ────────────────────────────────────────────────────────
 async function fetchArtFromItunes(title, artist) {
   try {
-    const norm = s => (s||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
-    const ntl = norm(title);
-    const nal = norm(artist);
-    const firstWord = nal.split(' ')[0];
+    const ntl = _artNorm(title);
+    const nal = _artNorm(artist);
+    const fw = _artFirstSig(nal);
 
-    // Word-overlap: fraction of significant words in A that appear in B
-    const sigWords = s => s.split(' ').filter(w => w.length > 2);
-    const wordOverlap = (a, b) => {
-      const aw = sigWords(a); if (!aw.length) return 0;
-      const bSet = new Set(sigWords(b));
-      return aw.filter(w => bSet.has(w)).length / aw.length;
-    };
+    const scoreR = r => _artTitleScore(ntl, _artNorm(r.collectionName||'')) + _artArtistScore(nal, _artNorm(r.artistName||''));
 
-    const score = (r) => {
-      const rt = norm(r.collectionName||'');
-      const ra = norm(r.artistName||'');
-      let s = 0;
-      // Title scoring
-      if (rt === ntl) { s += 10; }
-      else {
-        const ov = wordOverlap(ntl, rt);
-        if (ov >= 0.8) s += 8;       // e.g. "The Blueprint 3" ↔ "Blueprint 3"
-        else if (ov >= 0.6) s += 5;  // reasonable partial match
-        else if (rt.includes(ntl) || ntl.includes(rt)) s += 5; // substring fallback
-      }
-      // Artist scoring — needed as tiebreaker / gating for partial title matches
-      if (ra === nal) s += 4;
-      else if (ra.includes(firstWord) && firstWord.length > 2) s += 2;
-      else if (nal.includes(ra.split(' ')[0]) && (ra.split(' ')[0]||'').length > 2) s += 2;
-      return s;
-    };
-
-    const findBest = (results) => {
-      // Exact title (10+) accepted alone; partial title needs artist boost (total ≥ 7)
-      const scored = results.map(r => ({ r, s: score(r) })).filter(x => x.s >= 7);
+    const findBest = (results, min) => {
+      const scored = results.map(r => ({ r, s: scoreR(r) })).filter(x => x.s >= min);
       if (!scored.length) return null;
       return scored.sort((a, b) => b.s - a.s)[0].r;
     };
@@ -764,43 +765,36 @@ async function fetchArtFromItunes(title, artist) {
       return (await resp.json()).results || [];
     };
 
-    // Pass 1: "Artist Title"
-    let match = findBest(await trySearch(`${artist} ${title}`));
-    // Pass 2: title only (helps with collabs / unusual artist names)
-    if (!match) match = findBest(await trySearch(title));
-    // Pass 3: first word of artist + title (e.g. "Notorious B.I.G." → "Notorious Ready to Die")
-    if (!match && firstWord.length > 2) match = findBest(await trySearch(`${firstWord} ${title}`));
-    // Pass 4: strip leading "The/A/An" from title (e.g. "The College Dropout" → "College Dropout")
+    // Pass 1: "Artist Title" — iTunes biased toward our artist, title match alone is sufficient
+    let match = findBest(await trySearch(`${artist} ${title}`), 5);
+    // Pass 2: title only — needs artist correlation
+    if (!match) match = findBest(await trySearch(title), 9);
+    // Pass 3: first significant word + title (e.g. "notorious ready to die")
+    if (!match && fw.length > 2) match = findBest(await trySearch(`${fw} ${title}`), 9);
+    // Pass 4: strip leading article from title
     const stripped = title.replace(/^(the|a|an)\s+/i, '').trim();
-    if (!match && stripped !== title) match = findBest(await trySearch(`${artist} ${stripped}`));
+    if (!match && stripped !== title) match = findBest(await trySearch(`${artist} ${stripped}`), 5);
 
     if (!match) return null;
     return match.artworkUrl100 || match.artworkUrl60 || null;
   } catch(e) { return null; }
 }
 
-// ─── MUSICBRAINZ ART FETCH (fallback) ────────────────────────────────────────
-async function fetchArtFromMusicBrainz(title, artist) {
+// ─── DEEZER ART FETCH (fallback) ─────────────────────────────────────────────
+async function fetchArtFromDeezer(title, artist) {
   try {
-    const q = `artist:"${artist.replace(/"/g,'')}" AND release:"${title.replace(/"/g,'')}"`;
-    const mbResp = await fetch(
-      `https://musicbrainz.org/ws/2/release/?query=${encodeURIComponent(q)}&fmt=json&limit=5`,
-      { headers: { 'User-Agent': 'VinylDailySpin/1.0' } }
-    );
-    if (!mbResp.ok) return null;
-    const mbData = await mbResp.json();
-    if (!mbData.releases?.length) return null;
-    // Use Cover Art Archive JSON API — returns URL strings, no image-fetch CORS needed
-    for (const rel of mbData.releases.slice(0, 3)) {
-      try {
-        const caaResp = await fetch(`https://coverartarchive.org/release/${rel.id}`);
-        if (!caaResp.ok) continue;
-        const caaData = await caaResp.json();
-        const front = (caaData.images||[]).find(i => i.front) || caaData.images?.[0];
-        if (!front) continue;
-        const url = front.thumbnails?.['500'] || front.thumbnails?.large || front.image;
-        if (url) return url;
-      } catch(e) { continue; }
+    const ntl = _artNorm(title);
+    const nal = _artNorm(artist);
+    const resp = await fetch(`https://api.deezer.com/search/album?q=${encodeURIComponent(artist + ' ' + title)}&limit=10`);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (!data.data?.length) return null;
+    for (const album of data.data) {
+      const rt = _artNorm(album.title||'');
+      const ra = _artNorm(album.artist?.name||'');
+      const ts = _artTitleScore(ntl, rt);
+      const as = _artArtistScore(nal, ra);
+      if (ts + as >= 9) return album.cover_xl || album.cover_big || album.cover_medium || null;
     }
     return null;
   } catch(e) { return null; }
@@ -827,12 +821,7 @@ async function bulkFetchArt() {
     // 2. Get all albums
     const allAlbums = await getAllAlbums();
 
-    // 3. Hardcoded to column J (index 9)
-    const ART_COL = 'J';
-    // Write header to J1
-    await sheetsBatchUpdate([{ range: `Ranked albums!${ART_COL}1`, values: [['ArtUrl']] }]);
-
-    // 3. All albums with a title + artist (re-fetch everything to overwrite bad URLs)
+    // 3. All albums with title + artist
     const missing = allAlbums.filter(a => {
       const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
       const artist = (a.Artist||'').trim();
@@ -840,17 +829,23 @@ async function bulkFetchArt() {
     });
 
     if (!missing.length) {
-      statusEl.textContent = '✅ All albums already have art cached!';
+      statusEl.textContent = '✅ No albums to fetch art for!';
       barEl.style.width = '100%';
       closeBtn.classList.remove('hidden');
       return;
     }
 
-    statusEl.textContent = `Fetching art for ${missing.length} albums…`;
-    countEl.textContent = `0 / ${missing.length} checked`;
+    // 4. Clear ALL existing J column values first so stale wrong URLs don't persist
+    statusEl.textContent = 'Clearing old art URLs from sheet…';
+    const clearUpdates = [{ range: 'Ranked albums!J1', values: [['ArtUrl']] }]
+      .concat(missing.map(a => ({ range: `Ranked albums!J${a.rowIndex}`, values: [['']] })));
+    await sheetsBatchUpdate(clearUpdates);
 
-    // 4. Fetch in parallel chunks of 8
-    const CHUNK = 8;
+    statusEl.textContent = `iTunes pass: fetching art for ${missing.length} albums…`;
+    countEl.textContent = `0 / ${missing.length}`;
+
+    // 5. iTunes — parallel chunks of 3 with 500ms delay (avoids rate limiting)
+    const CHUNK = 3;
     const found = [];
     let checked = 0;
 
@@ -871,40 +866,107 @@ async function bulkFetchArt() {
         }
       }
       checked += chunk.length;
-      const pct = Math.round((checked / missing.length) * 100);
-      barEl.style.width = pct + '%';
-      countEl.textContent = `${checked} / ${missing.length} checked · ${found.length} found`;
-      statusEl.textContent = `Fetching… (${pct}%)`;
-      // Small delay between chunks to be nice to the API
-      if (i + CHUNK < missing.length) await new Promise(r => setTimeout(r, 200));
+      barEl.style.width = Math.round((checked / missing.length) * 50) + '%'; // iTunes = first 50%
+      countEl.textContent = `iTunes: ${checked}/${missing.length} checked · ${found.length} found`;
+      if (i + CHUNK < missing.length) await new Promise(r => setTimeout(r, 500));
     }
 
-    // 5. MusicBrainz sequential fallback for albums iTunes missed
+    // 6. Deezer fallback for albums iTunes missed (parallel chunks of 4, no rate limit)
     const notFound = missing.filter(a => {
       const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
       const artist = (a.Artist||'').trim();
       return !_artCache[`${title}|${artist}`];
     });
     if (notFound.length) {
-      statusEl.textContent = `iTunes: ${found.length} found. Trying MusicBrainz for ${notFound.length} remaining…`;
-      for (let i = 0; i < notFound.length; i++) {
-        const a = notFound[i];
-        const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
-        const artist = (a.Artist||'').trim();
-        const url = await fetchArtFromMusicBrainz(title, artist);
-        if (url) {
-          const key = `${title}|${artist}`;
-          _artCache[key] = url;
-          persistArtUrl(key, url);
-          found.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
+      statusEl.textContent = `iTunes: ${found.length} found. Deezer pass for ${notFound.length} remaining…`;
+      const D_CHUNK = 4;
+      let dchecked = 0;
+      for (let i = 0; i < notFound.length; i += D_CHUNK) {
+        const chunk = notFound.slice(i, i + D_CHUNK);
+        const dResults = await Promise.all(chunk.map(async a => {
+          const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
+          const artist = (a.Artist||'').trim();
+          const url = await fetchArtFromDeezer(title, artist);
+          return { a, title, artist, url };
+        }));
+        for (const { a, title, artist, url } of dResults) {
+          if (url) {
+            const key = `${title}|${artist}`;
+            _artCache[key] = url;
+            persistArtUrl(key, url);
+            found.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
+          }
         }
-        countEl.textContent = `MusicBrainz: ${i+1}/${notFound.length} · total found: ${found.length}`;
-        // MusicBrainz rate limit: 1 req/sec
-        await new Promise(r => setTimeout(r, 1100));
+        dchecked += chunk.length;
+        barEl.style.width = (50 + Math.round((dchecked / notFound.length) * 50)) + '%';
+        countEl.textContent = `Deezer: ${dchecked}/${notFound.length} · total found: ${found.length}`;
+        if (i + D_CHUNK < notFound.length) await new Promise(r => setTimeout(r, 300));
       }
     }
 
-    // 6. Write all found URLs to sheet in one batch
+    // 7. iTunes artist-lookup pass — group remaining misses by artist, get full discography
+    const stillMissing = missing.filter(a => {
+      const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
+      const artist = (a.Artist||'').trim();
+      return !_artCache[`${title}|${artist}`];
+    });
+    if (stillMissing.length) {
+      // Group by artist
+      const byArtist = {};
+      for (const a of stillMissing) {
+        const artist = (a.Artist||'').trim();
+        if (!byArtist[artist]) byArtist[artist] = [];
+        byArtist[artist].push(a);
+      }
+      const artists = Object.keys(byArtist);
+      statusEl.textContent = `Artist lookup: checking ${artists.length} artists on iTunes…`;
+      let adone = 0;
+      for (const artist of artists) {
+        adone++;
+        countEl.textContent = `Artist ${adone}/${artists.length}: ${artist} · found: ${found.length}`;
+        try {
+          // Step 1: find artist ID
+          const sResp = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artist)}&media=music&entity=musicArtist&limit=3`);
+          if (!sResp.ok) { await new Promise(r=>setTimeout(r,400)); continue; }
+          const sData = await sResp.json();
+          if (!sData.results?.length) { await new Promise(r=>setTimeout(r,400)); continue; }
+          const nal = _artNorm(artist);
+          const aResult = sData.results.find(r => _artNorm(r.artistName||'') === nal) || sData.results[0];
+          const artistId = aResult?.artistId;
+          if (!artistId) { await new Promise(r=>setTimeout(r,400)); continue; }
+          await new Promise(r=>setTimeout(r,350));
+          // Step 2: get all their albums (up to 200)
+          const lResp = await fetch(`https://itunes.apple.com/lookup?id=${artistId}&entity=album&limit=200`);
+          if (!lResp.ok) { await new Promise(r=>setTimeout(r,400)); continue; }
+          const lData = await lResp.json();
+          const catalog = (lData.results||[]).filter(r => r.wrapperType === 'collection');
+          if (!catalog.length) { await new Promise(r=>setTimeout(r,350)); continue; }
+          // Step 3: match each album from the miss list against the artist's full catalog
+          for (const a of byArtist[artist]) {
+            const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
+            const ntl = _artNorm(title);
+            let bestMatch = null, bestScore = 0;
+            for (const ci of catalog) {
+              const s = _artTitleScore(ntl, _artNorm(ci.collectionName||''));
+              if (s > bestScore) { bestScore = s; bestMatch = ci; }
+            }
+            // Artist already confirmed — just need a title match (score ≥ 5)
+            if (bestMatch && bestScore >= 5) {
+              const url = bestMatch.artworkUrl100 || bestMatch.artworkUrl60;
+              if (url) {
+                const key = `${title}|${artist}`;
+                _artCache[key] = url;
+                persistArtUrl(key, url);
+                found.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
+              }
+            }
+          }
+        } catch(e) {}
+        await new Promise(r=>setTimeout(r,350));
+      }
+    }
+
+    // 8. Write all found URLs to sheet in one batch
     if (found.length) {
       statusEl.textContent = `Writing ${found.length} URLs to sheet…`;
       const BATCH = 500;
