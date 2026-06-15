@@ -82,7 +82,7 @@ tailwind.config = {
 <div id="settings-modal" class="hidden fixed inset-0 z-50 flex items-end justify-center md:items-center p-4" style="background:rgba(0,0,0,0.75)" onclick="closeSettings()">
   <div class="card w-full max-w-sm overflow-y-auto" style="max-height:90vh" onclick="event.stopPropagation()">
     <div class="flex items-center justify-between mb-5">
-      <h2 class="text-lg font-bold text-white">⚙️ Settings <span class="text-xs text-gray-500 font-normal">v6.15.D</span></h2>
+      <h2 class="text-lg font-bold text-white">⚙️ Settings <span class="text-xs text-gray-500 font-normal">v6.15.E</span></h2>
       <button onclick="closeSettings()" class="text-gray-500 hover:text-white text-xl leading-none">✕</button>
     </div>
 
@@ -722,7 +722,11 @@ const _artNorm = s => (s||'')
   .toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
 const _artStops = new Set(['the','a','an','and','or','of','in','is','to','da','el','les','de']);
 // First significant word — skips stop words so "The Notorious B.I.G." → "notorious"
-const _artFirstSig = nal => nal.split(' ').find(w => w.length > 2 && !_artStops.has(w)) || nal.split(' ')[0];
+// Prefer longer/more unique words — "Lil Uzi Vert" → "vert", "Mac Miller" → "miller", not "lil"/"mac"
+const _artFirstSig = nal => {
+  const ws = nal.split(' ').filter(w => !_artStops.has(w));
+  return ws.find(w => w.length >= 5) || ws.find(w => w.length >= 4) || ws.find(w => w.length >= 3) || ws[0] || '';
+};
 const _artSigWords = s => s.split(' ').filter(w => w.length > 2 && !_artStops.has(w));
 const _artOverlap = (a, b) => {
   const aw = _artSigWords(a); if (!aw.length) return 0;
@@ -754,6 +758,8 @@ async function fetchArtFromItunes(title, artist) {
   try {
     const ntl = _artNorm(title);
     const nal = _artNorm(artist);
+    // Symbol-only titles ("+", "★", etc.) norm to empty — can't match reliably, skip
+    if (ntl.length < 2) return null;
     const fw = _artFirstSig(nal);
 
     // Require BOTH conditions independently — prevents "exact title, wrong artist" false matches
@@ -793,6 +799,7 @@ async function fetchArtFromDeezer(title, artist) {
   try {
     const ntl = _artNorm(title);
     const nal = _artNorm(artist);
+    if (ntl.length < 2) return null;
     const resp = await fetch(`https://api.deezer.com/search/album?q=${encodeURIComponent(artist + ' ' + title)}&limit=10`);
     if (!resp.ok) return null;
     const data = await resp.json();
