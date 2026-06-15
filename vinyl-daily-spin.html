@@ -767,14 +767,14 @@ async function fetchArtFromItunes(title, artist) {
 
     // All passes require score ≥ 9: prevents partial-title + weak-artist false matches
     // Pass 1: "Artist Title"
-    let match = findBest(await trySearch(`${artist} ${title}`), 9);
+    let match = findBest(await trySearch(`${artist} ${title}`), 10);
     // Pass 2: title only
-    if (!match) match = findBest(await trySearch(title), 9);
+    if (!match) match = findBest(await trySearch(title), 10);
     // Pass 3: first significant word of artist + title
-    if (!match && fw.length > 2) match = findBest(await trySearch(`${fw} ${title}`), 9);
+    if (!match && fw.length > 2) match = findBest(await trySearch(`${fw} ${title}`), 10);
     // Pass 4: strip leading article from title
     const stripped = title.replace(/^(the|a|an)\s+/i, '').trim();
-    if (!match && stripped !== title) match = findBest(await trySearch(`${artist} ${stripped}`), 9);
+    if (!match && stripped !== title) match = findBest(await trySearch(`${artist} ${stripped}`), 10);
 
     if (!match) return null;
     return match.artworkUrl100 || match.artworkUrl60 || null;
@@ -795,7 +795,7 @@ async function fetchArtFromDeezer(title, artist) {
       const ra = _artNorm(album.artist?.name||'');
       const ts = _artTitleScore(ntl, rt);
       const as = _artArtistScore(nal, ra);
-      if (ts + as >= 9) return album.cover_xl || album.cover_big || album.cover_medium || null;
+      if (ts + as >= 10) return album.cover_xl || album.cover_big || album.cover_medium || null;
     }
     return null;
   } catch(e) { return null; }
@@ -954,7 +954,7 @@ async function bulkFetchArt() {
               const s = _artTitleScore(ntl, _artNorm(ci.collectionName||''));
               if (s > bestScore) { bestScore = s; bestMatch = ci; }
             }
-            // Artist confirmed — require 80%+ word overlap (score ≥ 8) to avoid wrong albums
+            // Artist confirmed — require 80%+ word overlap (score ≥ 8) or exact match (10)
             if (bestMatch && bestScore >= 8) {
               const url = bestMatch.artworkUrl100 || bestMatch.artworkUrl60;
               if (url) {
