@@ -82,7 +82,7 @@ tailwind.config = {
 <div id="settings-modal" class="hidden fixed inset-0 z-50 flex items-end justify-center md:items-center p-4" style="background:rgba(0,0,0,0.75)" onclick="closeSettings()">
   <div class="card w-full max-w-sm overflow-y-auto" style="max-height:90vh" onclick="event.stopPropagation()">
     <div class="flex items-center justify-between mb-5">
-      <h2 class="text-lg font-bold text-white">⚙️ Settings <span class="text-xs text-gray-500 font-normal">v6.15.F</span></h2>
+      <h2 class="text-lg font-bold text-white">⚙️ Settings <span class="text-xs text-gray-500 font-normal">v6.15.D2</span></h2>
       <button onclick="closeSettings()" class="text-gray-500 hover:text-white text-xl leading-none">✕</button>
     </div>
 
@@ -742,10 +742,10 @@ const _artArtistScore = (nal, ra) => {
   const fw = _artFirstSig(nal);
   const raWords = new Set(ra.split(' '));
   const nalWords = new Set(nal.split(' '));
-  // Require ≥4 chars so "lil"/"mac"/"jay" (3 chars) can't match across artists — only exact names do
-  if (fw.length >= 4 && raWords.has(fw)) return 2;
+  // Whole-word match only — prevents "mac" matching "macabre", "notorious" matching "notoriously" etc.
+  if (fw.length > 2 && raWords.has(fw)) return 2;
   const rfw = _artFirstSig(ra);
-  if (rfw.length >= 4 && nalWords.has(rfw)) return 2;
+  if (rfw.length > 2 && nalWords.has(rfw)) return 2;
   return 0;
 };
 
@@ -754,8 +754,6 @@ async function fetchArtFromItunes(title, artist) {
   try {
     const ntl = _artNorm(title);
     const nal = _artNorm(artist);
-    // Symbol-only titles ("+", "★", etc.) norm to empty — can't match reliably, skip
-    if (ntl.length < 2) return null;
     const fw = _artFirstSig(nal);
 
     // Require BOTH conditions independently — prevents "exact title, wrong artist" false matches
@@ -795,7 +793,6 @@ async function fetchArtFromDeezer(title, artist) {
   try {
     const ntl = _artNorm(title);
     const nal = _artNorm(artist);
-    if (ntl.length < 2) return null;
     const resp = await fetch(`https://api.deezer.com/search/album?q=${encodeURIComponent(artist + ' ' + title)}&limit=10`);
     if (!resp.ok) return null;
     const data = await resp.json();
