@@ -765,15 +765,16 @@ async function fetchArtFromItunes(title, artist) {
       return (await resp.json()).results || [];
     };
 
-    // Pass 1: "Artist Title" — iTunes biased toward our artist, title match alone is sufficient
-    let match = findBest(await trySearch(`${artist} ${title}`), 5);
-    // Pass 2: title only — needs artist correlation
+    // All passes require score ≥ 9: prevents partial-title + weak-artist false matches
+    // Pass 1: "Artist Title"
+    let match = findBest(await trySearch(`${artist} ${title}`), 9);
+    // Pass 2: title only
     if (!match) match = findBest(await trySearch(title), 9);
-    // Pass 3: first significant word + title (e.g. "notorious ready to die")
+    // Pass 3: first significant word of artist + title
     if (!match && fw.length > 2) match = findBest(await trySearch(`${fw} ${title}`), 9);
     // Pass 4: strip leading article from title
     const stripped = title.replace(/^(the|a|an)\s+/i, '').trim();
-    if (!match && stripped !== title) match = findBest(await trySearch(`${artist} ${stripped}`), 5);
+    if (!match && stripped !== title) match = findBest(await trySearch(`${artist} ${stripped}`), 9);
 
     if (!match) return null;
     return match.artworkUrl100 || match.artworkUrl60 || null;
@@ -818,8 +819,11 @@ async function bulkFetchArt() {
     try { localStorage.removeItem(ART_LS_KEY); } catch(e) {}
     for (const k of Object.keys(_artCache)) delete _artCache[k];
 
-    // 2. Get all albums
+    // 2. Get all albums (getAllAlbums re-seeds _artCache from the old sheet — clear it again
+    //    immediately so stale wrong URLs don't survive into the UI after this fetch)
     const allAlbums = await getAllAlbums();
+    try { localStorage.removeItem(ART_LS_KEY); } catch(e) {}
+    for (const k of Object.keys(_artCache)) delete _artCache[k];
 
     // 3. All albums with title + artist
     const missing = allAlbums.filter(a => {
