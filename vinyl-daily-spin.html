@@ -717,7 +717,9 @@ async function testArtApi() {
 }
 
 // ─── SHARED ART HELPERS ──────────────────────────────────────────────────────
-const _artNorm = s => (s||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
+const _artNorm = s => (s||'')
+  .normalize('NFKD').replace(/[̀-ͯ]/g,'') // ö→o, é→e, ü→u, etc.
+  .toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
 const _artStops = new Set(['the','a','an','and','or','of','in','is','to','da','el','les','de']);
 // First significant word — skips stop words so "The Notorious B.I.G." → "notorious"
 const _artFirstSig = nal => nal.split(' ').find(w => w.length > 2 && !_artStops.has(w)) || nal.split(' ')[0];
@@ -738,9 +740,12 @@ const _artTitleScore = (ntl, rt) => {
 const _artArtistScore = (nal, ra) => {
   if (ra === nal) return 4;
   const fw = _artFirstSig(nal);
-  if (fw.length > 2 && ra.includes(fw)) return 2;
+  const raWords = new Set(ra.split(' '));
+  const nalWords = new Set(nal.split(' '));
+  // Whole-word match only — prevents "mac" matching "macabre", "notorious" matching "notoriously" etc.
+  if (fw.length > 2 && raWords.has(fw)) return 2;
   const rfw = _artFirstSig(ra);
-  if (rfw.length > 2 && nal.includes(rfw)) return 2;
+  if (rfw.length > 2 && nalWords.has(rfw)) return 2;
   return 0;
 };
 
@@ -938,7 +943,8 @@ async function bulkFetchArt() {
           const sData = await sResp.json();
           if (!sData.results?.length) { await new Promise(r=>setTimeout(r,400)); continue; }
           const nal = _artNorm(artist);
-          const aResult = sData.results.find(r => _artNorm(r.artistName||'') === nal) || sData.results[0];
+          // Only use exact artist name match — never fall back to results[0] (wrong artist)
+          const aResult = sData.results.find(r => _artNorm(r.artistName||'') === nal);
           const artistId = aResult?.artistId;
           if (!artistId) { await new Promise(r=>setTimeout(r,400)); continue; }
           await new Promise(r=>setTimeout(r,350));
