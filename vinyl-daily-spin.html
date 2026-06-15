@@ -719,17 +719,17 @@ async function testArtApi() {
 // ─── ITUNES ART FETCH ────────────────────────────────────────────────────────
 async function fetchArtFromItunes(title, artist) {
   try {
-    // Normalize: lowercase, strip punctuation, collapse spaces
     const norm = s => (s||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
     const ntl = norm(title);
     const nal = norm(artist);
     const firstWord = nal.split(' ')[0];
 
-    const trySearch = async (q) => {
-      const resp = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&media=music&entity=album&limit=10`);
-      if (!resp.ok) return [];
-      const data = await resp.json();
-      return data.results || [];
+    // Word-overlap: fraction of significant words in A that appear in B
+    const sigWords = s => s.split(' ').filter(w => w.length > 2);
+    const wordOverlap = (a, b) => {
+      const aw = sigWords(a); if (!aw.length) return 0;
+      const bSet = new Set(sigWords(b));
+      return aw.filter(w => bSet.has(w)).length / aw.length;
     };
 
     const score = (r) => {
@@ -737,28 +737,42 @@ async function fetchArtFromItunes(title, artist) {
       const ra = norm(r.artistName||'');
       let s = 0;
       // Title scoring
-      if (rt === ntl) s += 10;
-      else if (rt.includes(ntl) || ntl.includes(rt)) s += 5;
-      // Artist scoring (bonus, not required)
+      if (rt === ntl) { s += 10; }
+      else {
+        const ov = wordOverlap(ntl, rt);
+        if (ov >= 0.8) s += 8;       // e.g. "The Blueprint 3" ↔ "Blueprint 3"
+        else if (ov >= 0.6) s += 5;  // reasonable partial match
+        else if (rt.includes(ntl) || ntl.includes(rt)) s += 5; // substring fallback
+      }
+      // Artist scoring — needed as tiebreaker / gating for partial title matches
       if (ra === nal) s += 4;
-      else if (ra.includes(firstWord) || firstWord.length > 2 && ra.startsWith(firstWord)) s += 2;
+      else if (ra.includes(firstWord) && firstWord.length > 2) s += 2;
+      else if (nal.includes(ra.split(' ')[0]) && (ra.split(' ')[0]||'').length > 2) s += 2;
       return s;
     };
 
     const findBest = (results) => {
-      // Exact title (>=10) is enough alone.
-      // Partial title (5) requires artist correlation (+2) → min 7.
+      // Exact title (10+) accepted alone; partial title needs artist boost (total ≥ 7)
       const scored = results.map(r => ({ r, s: score(r) })).filter(x => x.s >= 7);
       if (!scored.length) return null;
       return scored.sort((a, b) => b.s - a.s)[0].r;
     };
 
-    // Pass 1: artist + title
+    const trySearch = async (q) => {
+      const resp = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&media=music&entity=album&limit=10`);
+      if (!resp.ok) return [];
+      return (await resp.json()).results || [];
+    };
+
+    // Pass 1: "Artist Title"
     let match = findBest(await trySearch(`${artist} ${title}`));
-    // Pass 2: title only (helps with odd artist names / collabs)
+    // Pass 2: title only (helps with collabs / unusual artist names)
     if (!match) match = findBest(await trySearch(title));
-    // Pass 3: first word of artist + title (helps e.g. "Notorious B.I.G." → "Notorious")
+    // Pass 3: first word of artist + title (e.g. "Notorious B.I.G." → "Notorious Ready to Die")
     if (!match && firstWord.length > 2) match = findBest(await trySearch(`${firstWord} ${title}`));
+    // Pass 4: strip leading "The/A/An" from title (e.g. "The College Dropout" → "College Dropout")
+    const stripped = title.replace(/^(the|a|an)\s+/i, '').trim();
+    if (!match && stripped !== title) match = findBest(await trySearch(`${artist} ${stripped}`));
 
     if (!match) return null;
     return match.artworkUrl100 || match.artworkUrl60 || null;
@@ -769,19 +783,24 @@ async function fetchArtFromItunes(title, artist) {
 async function fetchArtFromMusicBrainz(title, artist) {
   try {
     const q = `artist:"${artist.replace(/"/g,'')}" AND release:"${title.replace(/"/g,'')}"`;
-    const resp = await fetch(
+    const mbResp = await fetch(
       `https://musicbrainz.org/ws/2/release/?query=${encodeURIComponent(q)}&fmt=json&limit=5`,
-      { headers: { 'User-Agent': 'VinylDailySpin/1.0 (music-journal-app)' } }
+      { headers: { 'User-Agent': 'VinylDailySpin/1.0' } }
     );
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    if (!data.releases || !data.releases.length) return null;
-    // Try each release until one has cover art
-    for (const release of data.releases.slice(0, 3)) {
+    if (!mbResp.ok) return null;
+    const mbData = await mbResp.json();
+    if (!mbData.releases?.length) return null;
+    // Use Cover Art Archive JSON API — returns URL strings, no image-fetch CORS needed
+    for (const rel of mbData.releases.slice(0, 3)) {
       try {
-        const artResp = await fetch(`https://coverartarchive.org/release/${release.id}/front-500`);
-        if (artResp.ok) return artResp.url; // follows redirect; .url = final image URL
-      } catch(e) {}
+        const caaResp = await fetch(`https://coverartarchive.org/release/${rel.id}`);
+        if (!caaResp.ok) continue;
+        const caaData = await caaResp.json();
+        const front = (caaData.images||[]).find(i => i.front) || caaData.images?.[0];
+        if (!front) continue;
+        const url = front.thumbnails?.['500'] || front.thumbnails?.large || front.image;
+        if (url) return url;
+      } catch(e) { continue; }
     }
     return null;
   } catch(e) { return null; }
