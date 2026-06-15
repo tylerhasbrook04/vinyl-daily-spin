@@ -719,9 +719,11 @@ async function testArtApi() {
 // ─── ITUNES ART FETCH ────────────────────────────────────────────────────────
 async function fetchArtFromItunes(title, artist) {
   try {
-    const tl = title.toLowerCase().trim();
-    const al = artist.toLowerCase().trim();
-    const firstWord = al.split(/\s|&/)[0]; // first word of artist name
+    // Normalize: lowercase, strip punctuation, collapse spaces
+    const norm = s => (s||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
+    const ntl = norm(title);
+    const nal = norm(artist);
+    const firstWord = nal.split(' ')[0];
 
     const trySearch = async (q) => {
       const resp = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&media=music&entity=album&limit=10`);
@@ -730,20 +732,31 @@ async function fetchArtFromItunes(title, artist) {
       return data.results || [];
     };
 
-    const findMatch = (results) => {
-      // Strict: exact title + exact artist
-      return results.find(r => (r.collectionName||'').toLowerCase()===tl && (r.artistName||'').toLowerCase()===al) ||
-        // Loose: exact title + first word of artist
-        results.find(r => (r.collectionName||'').toLowerCase()===tl && (r.artistName||'').toLowerCase().includes(firstWord)) ||
-        // Looser: title contains + first word of artist
-        results.find(r => (r.collectionName||'').toLowerCase().includes(tl) && (r.artistName||'').toLowerCase().includes(firstWord)) ||
-        null; // never fall back to wrong art
+    const score = (r) => {
+      const rt = norm(r.collectionName||'');
+      const ra = norm(r.artistName||'');
+      let s = 0;
+      // Title scoring
+      if (rt === ntl) s += 10;
+      else if (rt.includes(ntl) || ntl.includes(rt)) s += 5;
+      // Artist scoring (bonus, not required)
+      if (ra === nal) s += 4;
+      else if (ra.includes(firstWord) || firstWord.length > 2 && ra.startsWith(firstWord)) s += 2;
+      return s;
     };
 
-    // First try: "artist title"
-    let match = findMatch(await trySearch(`${artist} ${title}`));
-    // Second try: "title" only (catches collaborations with unusual artist names)
-    if (!match) match = findMatch(await trySearch(title));
+    const findBest = (results) => {
+      const scored = results.map(r => ({ r, s: score(r) })).filter(x => x.s >= 5);
+      if (!scored.length) return null;
+      return scored.sort((a, b) => b.s - a.s)[0].r;
+    };
+
+    // Pass 1: artist + title
+    let match = findBest(await trySearch(`${artist} ${title}`));
+    // Pass 2: title only (helps with odd artist names / collabs)
+    if (!match) match = findBest(await trySearch(title));
+    // Pass 3: first word of artist + title (helps e.g. "Notorious B.I.G." → "Notorious")
+    if (!match && firstWord.length > 2) match = findBest(await trySearch(`${firstWord} ${title}`));
 
     if (!match) return null;
     return match.artworkUrl100 || match.artworkUrl60 || null;
