@@ -954,8 +954,8 @@ async function bulkFetchArt() {
               const s = _artTitleScore(ntl, _artNorm(ci.collectionName||''));
               if (s > bestScore) { bestScore = s; bestMatch = ci; }
             }
-            // Artist already confirmed — just need a title match (score ≥ 5)
-            if (bestMatch && bestScore >= 5) {
+            // Artist confirmed — require 80%+ word overlap (score ≥ 8) to avoid wrong albums
+            if (bestMatch && bestScore >= 8) {
               const url = bestMatch.artworkUrl100 || bestMatch.artworkUrl60;
               if (url) {
                 const key = `${title}|${artist}`;
