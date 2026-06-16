@@ -82,7 +82,7 @@ tailwind.config = {
 <div id="settings-modal" class="hidden fixed inset-0 z-50 flex items-end justify-center md:items-center p-4" style="background:rgba(0,0,0,0.75)" onclick="closeSettings()">
   <div class="card w-full max-w-sm overflow-y-auto" style="max-height:90vh" onclick="event.stopPropagation()">
     <div class="flex items-center justify-between mb-5">
-      <h2 class="text-lg font-bold text-white">⚙️ Settings <span class="text-xs text-gray-500 font-normal">v6.15.G</span></h2>
+      <h2 class="text-lg font-bold text-white">⚙️ Settings <span class="text-xs text-gray-500 font-normal">v6.15.H</span></h2>
       <button onclick="closeSettings()" class="text-gray-500 hover:text-white text-xl leading-none">✕</button>
     </div>
 
@@ -916,12 +916,16 @@ async function bulkFetchArt() {
       }
     }
 
-    // 7. iTunes artist-lookup pass — ALL albums, so exact catalog matches can OVERRIDE wrong iTunes results
-    //    (iTunes search can return wrong art; artist lookup with confirmed ID is authoritative)
-    {
-      // Group ALL albums by artist
+    // 7. iTunes artist-lookup pass — group remaining misses by artist, get full discography
+    const stillMissing = missing.filter(a => {
+      const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
+      const artist = (a.Artist||'').trim();
+      return !_artCache[`${title}|${artist}`];
+    });
+    if (stillMissing.length) {
+      // Group by artist
       const byArtist = {};
-      for (const a of missing) {
+      for (const a of stillMissing) {
         const artist = (a.Artist||'').trim();
         if (!byArtist[artist]) byArtist[artist] = [];
         byArtist[artist].push(a);
@@ -950,30 +954,23 @@ async function bulkFetchArt() {
           const lData = await lResp.json();
           const catalog = (lData.results||[]).filter(r => r.wrapperType === 'collection');
           if (!catalog.length) { await new Promise(r=>setTimeout(r,350)); continue; }
-          // Step 3: match each album from the full list against the artist's confirmed catalog
+          // Step 3: match each album from the miss list against the artist's full catalog
           for (const a of byArtist[artist]) {
             const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
             const ntl = _artNorm(title);
-            const key = `${title}|${artist}`;
-            const alreadyHasArt = !!_artCache[key];
             let bestMatch = null, bestScore = 0;
             for (const ci of catalog) {
-              const ct = ci.collectionName || '';
-              let s = _artTitleScore(ntl, _artNorm(ct));
-              // Symbol-only titles ("+", "★") norm to empty — raw exact match instead
-              if (s < 8 && ntl.length < 2 && ct.toLowerCase() === title.toLowerCase()) s = 10;
+              const s = _artTitleScore(ntl, _artNorm(ci.collectionName||''));
               if (s > bestScore) { bestScore = s; bestMatch = ci; }
             }
-            // Exact match (10) overrides wrong iTunes art; partial match (8) only fills gaps
-            if (bestMatch && (bestScore === 10 || (bestScore >= 8 && !alreadyHasArt))) {
+            // Artist confirmed — require 80%+ word overlap (score ≥ 8) or exact match (10)
+            if (bestMatch && bestScore >= 8) {
               const url = bestMatch.artworkUrl100 || bestMatch.artworkUrl60;
               if (url) {
+                const key = `${title}|${artist}`;
                 _artCache[key] = url;
                 persistArtUrl(key, url);
-                // Replace existing entry in found[] or add new one
-                const existingIdx = found.findIndex(f => f.range === `Ranked albums!J${a.rowIndex}`);
-                const update = { range: `Ranked albums!J${a.rowIndex}`, values: [[url]] };
-                if (existingIdx >= 0) found[existingIdx] = update; else found.push(update);
+                found.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
               }
             }
           }
@@ -982,7 +979,7 @@ async function bulkFetchArt() {
       }
     }
 
-    // 8. Write all found URLs to sheet in one batch
+    // 8. Write all found URLs to sheet in one batch — art is safe after this point
     if (found.length) {
       statusEl.textContent = `Writing ${found.length} URLs to sheet…`;
       const BATCH = 500;
@@ -990,6 +987,59 @@ async function bulkFetchArt() {
         await sheetsBatchUpdate(found.slice(i, i + BATCH));
       }
     }
+
+    // 9. Verification pass — artist catalog lookup for ALL albums to correct any wrong iTunes art.
+    //    Runs AFTER the main write so failures here can't affect already-saved art.
+    //    Only overrides with EXACT title matches (score=10) from the confirmed artist's catalog.
+    try {
+      const byArtistV = {};
+      for (const a of missing) {
+        const artist = (a.Artist||'').trim();
+        if (!byArtistV[artist]) byArtistV[artist] = [];
+        byArtistV[artist].push(a);
+      }
+      const artistsV = Object.keys(byArtistV);
+      statusEl.textContent = `Verifying art for ${missing.length} albums via artist catalogs…`;
+      const overrides = [];
+      for (const artist of artistsV) {
+        try {
+          const nal = _artNorm(artist);
+          const sResp = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artist)}&media=music&entity=musicArtist&limit=3`);
+          if (!sResp.ok) { await new Promise(r=>setTimeout(r,400)); continue; }
+          const sData = await sResp.json();
+          const aResult = (sData.results||[]).find(r => _artNorm(r.artistName||'') === nal);
+          if (!aResult?.artistId) { await new Promise(r=>setTimeout(r,400)); continue; }
+          await new Promise(r=>setTimeout(r,350));
+          const lResp = await fetch(`https://itunes.apple.com/lookup?id=${aResult.artistId}&entity=album&limit=200`);
+          if (!lResp.ok) { await new Promise(r=>setTimeout(r,400)); continue; }
+          const lData = await lResp.json();
+          const catalog = (lData.results||[]).filter(r => r.wrapperType === 'collection');
+          if (!catalog.length) { await new Promise(r=>setTimeout(r,350)); continue; }
+          for (const a of byArtistV[artist]) {
+            const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
+            const ntl = _artNorm(title);
+            let bestMatch = null, bestScore = 0;
+            for (const ci of catalog) {
+              const ct = ci.collectionName || '';
+              let s = _artTitleScore(ntl, _artNorm(ct));
+              // Symbol-only titles ("+", "★"): raw exact comparison since ntl is empty
+              if (ntl.length < 2 && ct.toLowerCase() === title.toLowerCase()) s = 10;
+              if (s > bestScore) { bestScore = s; bestMatch = ci; }
+            }
+            // Only override with exact match — never replace correct art with a partial guess
+            if (bestMatch && bestScore === 10) {
+              const url = bestMatch.artworkUrl100 || bestMatch.artworkUrl60;
+              if (url) overrides.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
+            }
+          }
+        } catch(e) {}
+        await new Promise(r=>setTimeout(r,350));
+      }
+      if (overrides.length) {
+        statusEl.textContent = `Correcting ${overrides.length} album image${overrides.length !== 1 ? 's' : ''} via catalog…`;
+        await sheetsBatchUpdate(overrides);
+      }
+    } catch(e) { /* verification failure is non-fatal — main art already saved */ }
 
     statusEl.textContent = `✅ Done! Found art for ${found.length} of ${missing.length} albums.`;
     barEl.style.width = '100%';
