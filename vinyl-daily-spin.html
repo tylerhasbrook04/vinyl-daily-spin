@@ -82,7 +82,7 @@ tailwind.config = {
 <div id="settings-modal" class="hidden fixed inset-0 z-50 flex items-end justify-center md:items-center p-4" style="background:rgba(0,0,0,0.75)" onclick="closeSettings()">
   <div class="card w-full max-w-sm overflow-y-auto" style="max-height:90vh" onclick="event.stopPropagation()">
     <div class="flex items-center justify-between mb-5">
-      <h2 class="text-lg font-bold text-white">⚙️ Settings <span class="text-xs text-gray-500 font-normal">v6.15.H</span></h2>
+      <h2 class="text-lg font-bold text-white">⚙️ Settings <span class="text-xs text-gray-500 font-normal">v6.16</span></h2>
       <button onclick="closeSettings()" class="text-gray-500 hover:text-white text-xl leading-none">✕</button>
     </div>
 
@@ -847,19 +847,22 @@ async function bulkFetchArt() {
       return;
     }
 
-    // 4. Clear ALL existing J column values first so stale wrong URLs don't persist
-    statusEl.textContent = 'Clearing old art URLs from sheet…';
-    const clearUpdates = [{ range: 'Ranked albums!J1', values: [['ArtUrl']] }]
-      .concat(missing.map(a => ({ range: `Ranked albums!J${a.rowIndex}`, values: [['']] })));
-    await sheetsBatchUpdate(clearUpdates);
+    // NOTE: we deliberately do NOT blank column J upfront anymore. Clearing everything
+    // before any replacement is written meant a single hiccup partway through (expired
+    // auth token, network blip, rate limit) left every album with NO art at all — that's
+    // what was wiping out previously-correct covers. Now old values are only ever
+    // overwritten once we have a confirmed new URL in hand, and we save each pass's
+    // results to the sheet immediately rather than waiting until the very end, so a
+    // failure in a later pass can never undo a successful earlier one.
 
     statusEl.textContent = `iTunes pass: fetching art for ${missing.length} albums…`;
     countEl.textContent = `0 / ${missing.length}`;
 
-    // 5. iTunes — parallel chunks of 3 with 500ms delay (avoids rate limiting)
+    // 4. iTunes — parallel chunks of 3 with 500ms delay (avoids rate limiting)
     const CHUNK = 3;
     const found = [];
     let checked = 0;
+    let itunesFound = [];
 
     for (let i = 0; i < missing.length; i += CHUNK) {
       const chunk = missing.slice(i, i + CHUNK);
@@ -874,16 +877,23 @@ async function bulkFetchArt() {
           const key = `${title}|${artist}`;
           _artCache[key] = url;
           persistArtUrl(key, url);
-          found.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
+          itunesFound.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
         }
       }
       checked += chunk.length;
-      barEl.style.width = Math.round((checked / missing.length) * 50) + '%'; // iTunes = first 50%
-      countEl.textContent = `iTunes: ${checked}/${missing.length} checked · ${found.length} found`;
+      barEl.style.width = Math.round((checked / missing.length) * 40) + '%'; // iTunes = first 40%
+      countEl.textContent = `iTunes: ${checked}/${missing.length} checked · ${itunesFound.length} found`;
       if (i + CHUNK < missing.length) await new Promise(r => setTimeout(r, 500));
     }
 
-    // 6. Deezer fallback for albums iTunes missed (parallel chunks of 4, no rate limit)
+    // Save iTunes matches now — they're safe even if a later pass fails.
+    if (itunesFound.length) {
+      statusEl.textContent = `Saving ${itunesFound.length} iTunes matches…`;
+      await sheetsBatchUpdate(itunesFound);
+      found.push(...itunesFound);
+    }
+
+    // 5. Deezer fallback for albums iTunes missed (parallel chunks of 4, no rate limit)
     const notFound = missing.filter(a => {
       const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
       const artist = (a.Artist||'').trim();
@@ -893,6 +903,7 @@ async function bulkFetchArt() {
       statusEl.textContent = `iTunes: ${found.length} found. Deezer pass for ${notFound.length} remaining…`;
       const D_CHUNK = 4;
       let dchecked = 0;
+      const dFound = [];
       for (let i = 0; i < notFound.length; i += D_CHUNK) {
         const chunk = notFound.slice(i, i + D_CHUNK);
         const dResults = await Promise.all(chunk.map(async a => {
@@ -906,17 +917,23 @@ async function bulkFetchArt() {
             const key = `${title}|${artist}`;
             _artCache[key] = url;
             persistArtUrl(key, url);
-            found.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
+            dFound.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
           }
         }
         dchecked += chunk.length;
-        barEl.style.width = (50 + Math.round((dchecked / notFound.length) * 50)) + '%';
-        countEl.textContent = `Deezer: ${dchecked}/${notFound.length} · total found: ${found.length}`;
+        barEl.style.width = (40 + Math.round((dchecked / notFound.length) * 30)) + '%';
+        countEl.textContent = `Deezer: ${dchecked}/${notFound.length} · total found: ${found.length + dFound.length}`;
         if (i + D_CHUNK < notFound.length) await new Promise(r => setTimeout(r, 300));
+      }
+      // Save Deezer matches now, independent of the iTunes save above.
+      if (dFound.length) {
+        statusEl.textContent = `Saving ${dFound.length} Deezer matches…`;
+        await sheetsBatchUpdate(dFound);
+        found.push(...dFound);
       }
     }
 
-    // 7. iTunes artist-lookup pass — group remaining misses by artist, get full discography
+    // 6. iTunes artist-lookup pass — group remaining misses by artist, get full discography
     const stillMissing = missing.filter(a => {
       const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
       const artist = (a.Artist||'').trim();
@@ -933,6 +950,7 @@ async function bulkFetchArt() {
       const artists = Object.keys(byArtist);
       statusEl.textContent = `Artist lookup: checking ${artists.length} artists on iTunes…`;
       let adone = 0;
+      const aFound = [];
       for (const artist of artists) {
         adone++;
         countEl.textContent = `Artist ${adone}/${artists.length}: ${artist} · found: ${found.length}`;
@@ -970,76 +988,20 @@ async function bulkFetchArt() {
                 const key = `${title}|${artist}`;
                 _artCache[key] = url;
                 persistArtUrl(key, url);
-                found.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
+                aFound.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
               }
             }
           }
         } catch(e) {}
         await new Promise(r=>setTimeout(r,350));
       }
-    }
-
-    // 8. Write all found URLs to sheet in one batch — art is safe after this point
-    if (found.length) {
-      statusEl.textContent = `Writing ${found.length} URLs to sheet…`;
-      const BATCH = 500;
-      for (let i = 0; i < found.length; i += BATCH) {
-        await sheetsBatchUpdate(found.slice(i, i + BATCH));
+      // Save artist-catalog matches now, independent of the earlier saves.
+      if (aFound.length) {
+        statusEl.textContent = `Saving ${aFound.length} artist-catalog matches…`;
+        await sheetsBatchUpdate(aFound);
+        found.push(...aFound);
       }
     }
-
-    // 9. Verification pass — artist catalog lookup for ALL albums to correct any wrong iTunes art.
-    //    Runs AFTER the main write so failures here can't affect already-saved art.
-    //    Only overrides with EXACT title matches (score=10) from the confirmed artist's catalog.
-    try {
-      const byArtistV = {};
-      for (const a of missing) {
-        const artist = (a.Artist||'').trim();
-        if (!byArtistV[artist]) byArtistV[artist] = [];
-        byArtistV[artist].push(a);
-      }
-      const artistsV = Object.keys(byArtistV);
-      statusEl.textContent = `Verifying art for ${missing.length} albums via artist catalogs…`;
-      const overrides = [];
-      for (const artist of artistsV) {
-        try {
-          const nal = _artNorm(artist);
-          const sResp = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artist)}&media=music&entity=musicArtist&limit=3`);
-          if (!sResp.ok) { await new Promise(r=>setTimeout(r,400)); continue; }
-          const sData = await sResp.json();
-          const aResult = (sData.results||[]).find(r => _artNorm(r.artistName||'') === nal);
-          if (!aResult?.artistId) { await new Promise(r=>setTimeout(r,400)); continue; }
-          await new Promise(r=>setTimeout(r,350));
-          const lResp = await fetch(`https://itunes.apple.com/lookup?id=${aResult.artistId}&entity=album&limit=200`);
-          if (!lResp.ok) { await new Promise(r=>setTimeout(r,400)); continue; }
-          const lData = await lResp.json();
-          const catalog = (lData.results||[]).filter(r => r.wrapperType === 'collection');
-          if (!catalog.length) { await new Promise(r=>setTimeout(r,350)); continue; }
-          for (const a of byArtistV[artist]) {
-            const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
-            const ntl = _artNorm(title);
-            let bestMatch = null, bestScore = 0;
-            for (const ci of catalog) {
-              const ct = ci.collectionName || '';
-              let s = _artTitleScore(ntl, _artNorm(ct));
-              // Symbol-only titles ("+", "★"): raw exact comparison since ntl is empty
-              if (ntl.length < 2 && ct.toLowerCase() === title.toLowerCase()) s = 10;
-              if (s > bestScore) { bestScore = s; bestMatch = ci; }
-            }
-            // Only override with exact match — never replace correct art with a partial guess
-            if (bestMatch && bestScore === 10) {
-              const url = bestMatch.artworkUrl100 || bestMatch.artworkUrl60;
-              if (url) overrides.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
-            }
-          }
-        } catch(e) {}
-        await new Promise(r=>setTimeout(r,350));
-      }
-      if (overrides.length) {
-        statusEl.textContent = `Correcting ${overrides.length} album image${overrides.length !== 1 ? 's' : ''} via catalog…`;
-        await sheetsBatchUpdate(overrides);
-      }
-    } catch(e) { /* verification failure is non-fatal — main art already saved */ }
 
     statusEl.textContent = `✅ Done! Found art for ${found.length} of ${missing.length} albums.`;
     barEl.style.width = '100%';
@@ -1145,7 +1107,10 @@ function initGIS() {
     }
   });
 }
-function requestToken() { if (tokenClient) tokenClient.requestAccessToken(); }
+// prompt:'select_account' forces Google's account chooser every time — without it, GIS can
+// silently reuse whatever Google session is already active in the browser, which is how you
+// end up signed into the app with a different account than the one that owns the spreadsheet.
+function requestToken() { if (tokenClient) tokenClient.requestAccessToken({ prompt: 'select_account' }); }
 
 // ─── ROUTING / NAV ───────────────────────────────────────────────────────────
 function navigate(route, data) {
