@@ -82,7 +82,7 @@ tailwind.config = {
 <div id="settings-modal" class="hidden fixed inset-0 z-50 flex items-end justify-center md:items-center p-4" style="background:rgba(0,0,0,0.75)" onclick="closeSettings()">
   <div class="card w-full max-w-sm overflow-y-auto" style="max-height:90vh" onclick="event.stopPropagation()">
     <div class="flex items-center justify-between mb-5">
-      <h2 class="text-lg font-bold text-white">⚙️ Settings <span class="text-xs text-gray-500 font-normal">v6.16</span></h2>
+      <h2 class="text-lg font-bold text-white">⚙️ Settings <span class="text-xs text-gray-500 font-normal">v6.27</span></h2>
       <button onclick="closeSettings()" class="text-gray-500 hover:text-white text-xl leading-none">✕</button>
     </div>
 
@@ -116,6 +116,19 @@ tailwind.config = {
 </div>
 
 <!-- EDIT ALBUM MODAL -->
+<div id="review-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" style="background:rgba(0,0,0,0.85)" onclick="closeReviewModal()">
+  <div class="card w-full max-w-md overflow-y-auto" style="max-height:80vh" onclick="event.stopPropagation()">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <h2 id="review-modal-title" class="text-lg font-bold text-white"></h2>
+        <div id="review-modal-artist" class="text-sm" style="color:var(--at)"></div>
+      </div>
+      <button onclick="closeReviewModal()" class="text-gray-500 hover:text-white text-xl leading-none ml-4">✕</button>
+    </div>
+    <div id="review-modal-rating" class="text-amber-400 font-bold text-sm mb-3"></div>
+    <div id="review-modal-body" class="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap"></div>
+  </div>
+</div>
 <div id="edit-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" style="background:rgba(0,0,0,0.85)" onclick="closeEditModal()">
   <div class="card w-full max-w-md overflow-y-auto" style="max-height:90vh" onclick="event.stopPropagation()">
     <div class="flex items-center justify-between mb-4">
@@ -212,6 +225,8 @@ const icons = {
   chevL: `<svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>`,
   chevR: `<svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>`,
   wrench: `<svg width="32" height="32" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`,
+  crown: `<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M2 20h20M4 20l2-8 6 4 6-4 2 8"/><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" fill="currentColor" stroke="none"/></svg>`,
+  globe: `<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`,
 };
 
 const NAV_ITEMS = [
@@ -219,11 +234,12 @@ const NAV_ITEMS = [
   { route:'ranking',   label:'Rate Album',    icon:'star' },
   { route:'queue',     label:'Queue',         icon:'list' },
   { route:'library',   label:'Library',       icon:'book' },
-  { route:'completed', label:'Completed',     icon:'check' },
   { route:'recent',    label:'Recent',        icon:'clock' },
   { route:'calendar',  label:'Calendar',      icon:'cal' },
   { route:'discover',  label:'Discover',      icon:'mood' },
   { route:'top10',     label:'Top 10',        icon:'trophy' },
+  { route:'aoty',      label:'Album of Year', icon:'crown' },
+  { route:'community', label:'Community',     icon:'globe' },
   { route:'relisten',  label:'Relisten',      icon:'refresh' },
   { route:'stats',     label:'Stats',         icon:'bar' },
   { route:'add',       label:'Add Album',     icon:'plus' },
@@ -274,15 +290,36 @@ const GENRES = ['Rock','Pop','Jazz','Blues','Hip-Hop','R&B','Electronic','Classi
 // ─── GOOGLE SHEETS API ───────────────────────────────────────────────────────
 const colLetter = (n) => { let s=''; while(n>=0){s=String.fromCharCode((n%26)+65)+s; n=Math.floor(n/26)-1;} return s; };
 
+// Google occasionally returns a transient 500 "Internal error encountered" on
+// otherwise-valid Sheets API calls (confirmed live: the exact same request
+// failed then succeeded seconds later with no code change). Retry on 5xx /
+// network failure only — never on 4xx, since those need real auth action.
+async function _sheetsFetch(url, options, retries) {
+  retries = retries == null ? 2 : retries;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const r = await fetch(url, options);
+      if (r.status >= 500 && attempt < retries) {
+        await new Promise(res => setTimeout(res, 1000 * (attempt + 1)));
+        continue;
+      }
+      return r;
+    } catch (e) {
+      if (attempt < retries) { await new Promise(res => setTimeout(res, 1000 * (attempt + 1))); continue; }
+      throw e;
+    }
+  }
+}
+
 async function sheetsGet(range) {
-  const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${S.sheetId}/values/${encodeURIComponent(range)}`,
+  const r = await _sheetsFetch(`https://sheets.googleapis.com/v4/spreadsheets/${S.sheetId}/values/${encodeURIComponent(range)}`,
     { headers:{ Authorization:`Bearer ${S.token}` } });
   if (!r.ok) { const t=await r.text(); throw new Error(`Sheets error: ${t}`); }
   return (await r.json()).values || [];
 }
 
 async function sheetsBatchUpdate(data) {
-  const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${S.sheetId}/values:batchUpdate`,
+  const r = await _sheetsFetch(`https://sheets.googleapis.com/v4/spreadsheets/${S.sheetId}/values:batchUpdate`,
     { method:'POST', headers:{ Authorization:`Bearer ${S.token}`, 'Content-Type':'application/json' },
       body: JSON.stringify({ valueInputOption:'RAW', data }) });
   if (!r.ok) { const t=await r.text(); throw new Error(`Sheets update error: ${t}`); }
@@ -290,7 +327,7 @@ async function sheetsBatchUpdate(data) {
 }
 
 async function sheetsAppend(range, values) {
-  const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${S.sheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED`,
+  const r = await _sheetsFetch(`https://sheets.googleapis.com/v4/spreadsheets/${S.sheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED`,
     { method:'POST', headers:{ Authorization:`Bearer ${S.token}`, 'Content-Type':'application/json' },
       body: JSON.stringify({ values }) });
   if (!r.ok) { const t=await r.text(); throw new Error(`Sheets append error: ${t}`); }
@@ -322,16 +359,28 @@ async function getAllAlbums() {
   const artColIdx = 9; // Column J (hardcoded)
   return rows.slice(1).map((row, idx) => {
     const obj = { rowIndex: idx+2 };
-    headers.forEach((h,i) => { const canon=canonicalHeader(h); const val=row[i]||''; if(!obj[canon] && val) obj[canon]=val; });
+    // Trim every cell on the way in. Without this, a stray trailing/leading space in a sheet
+    // cell (very easy to pick up from copy/paste) makes this row's obj.Artist/obj.AlbumTitle
+    // differ — by whitespace alone — from the value every other render/lookup site uses to build
+    // its art-cache key (they all read obj.Artist/obj.AlbumTitle raw). That silent mismatch is
+    // what was causing already-saved cover art to never display: the cache key built here
+    // wouldn't match the cache key built when the card renders, so it permanently fell back to
+    // "no art" for that row. Trimming once at the source keeps every downstream key consistent.
+    headers.forEach((h,i) => { const canon=canonicalHeader(h); const val=(row[i]||'').trim(); if(!obj[canon] && val) obj[canon]=val; });
     // Seed art cache from sheet column if present and not already cached
     if (artColIdx >= 0) {
       const artUrl = row[artColIdx] || '';
-      const title = (obj.AlbumTitle||'').replace(/\*$/,'').trim();
+      obj._artUrl = artUrl; // raw column J value — used by quick-fetch mode to skip albums that already have art
+      // Use the exact same title-cleaning (cleanTitle strips ALL asterisks, not just a trailing
+      // one) that every render site uses when building its own cache key, so this seed key always
+      // matches.
+      const title = cleanTitle(obj.AlbumTitle);
       const artist = (obj.Artist||'').trim();
       if (artUrl && title && artist) {
         const key = `${title}|${artist}`;
-        // Sheet value takes priority — always overwrite so bad cached URLs get replaced
-        _artCache[key] = artUrl; persistArtUrl(key, artUrl);
+        // Sheet value takes priority — always overwrite so bad cached URLs get replaced.
+        // Upgrade any stored iTunes 100×100 thumbnails to 600×600 in memory.
+        _artCache[key] = _itunesHiRes(artUrl); persistArtUrl(key, _itunesHiRes(artUrl));
       }
     }
     return obj;
@@ -376,9 +425,12 @@ async function updateAlbum(rowIndex, fields) {
   const rows = await sheetsGet('Ranked albums!A1:Z1');
   const headers = (rows[0]||[]);
   const updates = Object.entries(fields).map(([k,v]) => {
-    // try exact match first, then match via canonical name
-    let idx = headers.indexOf(k);
-    if (idx<0) idx = headers.findIndex(h => canonicalHeader(h) === k);
+    // Canonical match first (same precedence getAllAlbums() uses for reads) so this always
+    // writes to the same column the rest of the app reads from, even if a sheet happens to have
+    // a stray duplicate/alias header further down the row. Falls back to a literal header-text
+    // match only if nothing canonicalizes to this field name.
+    let idx = headers.findIndex(h => canonicalHeader(h) === k);
+    if (idx<0) idx = headers.indexOf(k);
     if (idx<0) return null;
     return { range:`Ranked albums!${colLetter(idx)}${rowIndex}`, values:[[v]] };
   }).filter(Boolean);
@@ -408,7 +460,7 @@ async function setupSheet() {
   headers.forEach((h,i) => {
     const n = norm(h);
     for (const [canonical, aliases] of Object.entries(aliasMap)) {
-      if (n===canonical || aliases.includes(n)) { const key=canonical.charAt(0).toUpperCase()+canonical.slice(1).replace('tag','Tag').replace('track','Track'); colMap[key]=i; }
+      if (n===canonical || aliases.includes(n)) { const key=canonical.charAt(0).toUpperCase()+canonical.slice(1).replace('tag','Tag').replace('track','Track').replace('title','Title'); colMap[key]=i; }
     }
     if (n==='albumid') colMap.AlbumID=i;
     if (n==='pickedbyme') colMap.PickedByMe=i;
@@ -436,6 +488,7 @@ async function setupSheet() {
 // ─── ALBUMLIST API ───────────────────────────────────────────────────────────
 async function getAlbumList() {
   const rows = await sheetsGet('AlbumList!A:C');
+  const qDates = (() => { try { return JSON.parse(localStorage.getItem('vds_queue_dates')||'{}'); } catch(e) { return {}; } })();
   // row 1 is empty, data starts at row 2
   return rows.slice(1).map((row, idx) => ({
     title: (row[0]||'').trim(),
@@ -444,7 +497,8 @@ async function getAlbumList() {
     rowIndex: idx + 2,
   })).filter(a => a.title).map(a => {
     // Pre-cache any stored art URLs so fetchAlbumArt returns them instantly
-    if (a.artUrl) _artCache[`${a.title}|${a.artist}`] = a.artUrl;
+    if (a.artUrl) _artCache[`${a.title}|${a.artist}`] = _itunesHiRes(a.artUrl);
+    a.dateAdded = qDates[`${a.title}|${a.artist}`] || null;
     return a;
   });
 }
@@ -479,19 +533,36 @@ function _applyArtUrl(title, artist, url) {
   }
 }
 
+// Escapes a string for safe embedding inside a single-quoted JS string literal within an
+// onclick="..." HTML attribute (the attribute itself is double-quoted, so the plain esc() helpers
+// elsewhere — which only escape " as &quot; — aren't enough here). Without this, an apostrophe in
+// an album title or artist name (e.g. "Who's Next", "Cosmo's Factory") terminates the JS string
+// literal early and breaks the handler, which silently no-ops the button when clicked. Only needed
+// at onclick call sites that interpolate title/artist as single-quoted JS args (e.g. showCardMenu).
+function escJsAttr(s) {
+  return (s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;');
+}
+
 // Card context menu
 let _cardMenuCtx = null;
 function showCardMenu(btn, type, title, artist, rowIndex, hasRelisten) {
-  _cardMenuCtx = { type, title, artist, rowIndex, hasRelisten };
+  _cardMenuCtx = { type, title, artist, rowIndex, hasRelisten, card: btn.closest('.card') };
   const hasArt = !!_artCache[`${title}|${artist}`];
   const menu = document.getElementById('card-menu');
   const btnClass = 'w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-white/5 transition-colors cursor-pointer';
   const sep = `<div style="border-top:1px solid rgba(255,255,255,0.08);margin:2px 0"></div>`;
   let html = '';
+  // Edit details always first
   if (type === 'library') {
     html += `<button class="${btnClass}" style="color:#e5e7eb" onclick="event.stopPropagation();hideCardMenu();menuEditAlbum()">✏️ Edit details</button>`;
     html += sep;
     html += `<button class="${btnClass}" style="color:#fb923c" onclick="event.stopPropagation();hideCardMenu();menuToggleRelisten()">${hasRelisten ? '✕ Remove Relisten tag' : '🔁 Mark for Relisten'}</button>`;
+    html += sep;
+    html += `<button class="${btnClass}" style="color:#fbbf24" onclick="event.stopPropagation();hideCardMenu();menuSetAoty()">👑 Set as Album of the Year</button>`;
+    html += sep;
+  }
+  if (type === 'queue') {
+    html += `<button class="${btnClass}" style="color:#e5e7eb" onclick="event.stopPropagation();hideCardMenu();menuEditQueue()">✏️ Edit details</button>`;
     html += sep;
   }
   html += `<button class="${btnClass}" style="color:var(--at)" onclick="event.stopPropagation();hideCardMenu();menuSetArt()">🖼 Set cover art</button>`;
@@ -511,15 +582,34 @@ function showCardMenu(btn, type, title, artist, rowIndex, hasRelisten) {
   event.stopPropagation();
 }
 function hideCardMenu() { document.getElementById('card-menu').classList.add('hidden'); }
+function menuSetAoty() {
+  if (!_cardMenuCtx) return;
+  const { title, artist, rowIndex } = _cardMenuCtx;
+  const a = (window._libraryAlbums||[]).find(x => x.rowIndex === rowIndex);
+  // Use the album's release Year, fall back to listen year from DateAssigned, then current year
+  const yr = (a && a.Year ? String(a.Year).trim()
+    : a && a.DateAssigned ? normalizeDate(a.DateAssigned).slice(0,4)
+    : String(new Date().getFullYear()));
+  if (!yr || !/^\d{4}$/.test(yr)) { alert('No year found for this album.'); return; }
+  try {
+    const aoty = JSON.parse(localStorage.getItem('vds_aoty')||'{}');
+    aoty[yr] = { title, artist, rating: a ? a.Rating : '', year: yr };
+    localStorage.setItem('vds_aoty', JSON.stringify(aoty));
+    const extra = JSON.parse(localStorage.getItem('vds_aoty_extra')||'[]');
+    if (!extra.includes(yr)) { extra.push(yr); localStorage.setItem('vds_aoty_extra', JSON.stringify(extra)); }
+    alert(`👑 "${title}" set as your ${yr} Album of the Year!`);
+  } catch(e) { alert('Error saving AOTY: ' + e.message); }
+}
 function menuSetArt() {
   if (!_cardMenuCtx) return;
   if (_cardMenuCtx.type === 'queue') setQueueArtUrl(_cardMenuCtx.rowIndex, _cardMenuCtx.title, _cardMenuCtx.artist);
-  else setLibraryArtUrl(_cardMenuCtx.title, _cardMenuCtx.artist);
+  else setLibraryArtUrl(_cardMenuCtx.rowIndex, _cardMenuCtx.title, _cardMenuCtx.artist);
 }
 function menuClearArt() {
   if (!_cardMenuCtx) return;
   _applyArtUrl(_cardMenuCtx.title, _cardMenuCtx.artist, '');
   if (_cardMenuCtx.type === 'queue') saveAlbumArtUrl(_cardMenuCtx.rowIndex, '').catch(()=>{});
+  else updateAlbum(_cardMenuCtx.rowIndex, { ArtUrl: '' }).catch(()=>{});
 }
 async function menuToggleRelisten() {
   if (!_cardMenuCtx) return;
@@ -543,16 +633,93 @@ async function menuToggleRelisten() {
 }
 async function menuDeleteQueue() {
   if (!_cardMenuCtx || !_cardMenuCtx.rowIndex) return;
-  if (!confirm(`Remove "${_cardMenuCtx.title}" from your queue?`)) return;
+  const { title, rowIndex, card } = _cardMenuCtx;
+  if (!confirm(`Remove "${title}" from your queue?`)) return;
   try {
-    const r = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${S.sheetId}/values/AlbumList!A${_cardMenuCtx.rowIndex}:C${_cardMenuCtx.rowIndex}/clear`,
-      { method:'POST', headers:{ Authorization:`Bearer ${S.token}` } }
-    );
-    if (!r.ok) throw new Error('Could not remove from queue');
+    await sheetsBatchUpdate([{
+      range: `AlbumList!A${rowIndex}:C${rowIndex}`,
+      values: [['', '', '']]
+    }]);
+    delete _artCache[`${_cardMenuCtx.title}|${_cardMenuCtx.artist}`];
+    try { const qd=JSON.parse(localStorage.getItem('vds_queue_dates')||'{}'); delete qd[`${_cardMenuCtx.title}|${_cardMenuCtx.artist}`]; localStorage.setItem('vds_queue_dates',JSON.stringify(qd)); } catch(e) {}
+    _cardMenuCtx = null;
     clearDailyCache();
-    navigate('queue');
-  } catch(e) { alert('Error: ' + e.message); }
+    // Remove card from DOM without a full page reload
+    if (card && card.isConnected) {
+      card.remove();
+      // Update the "(N)" count in the Queue heading
+      const countSpan = document.querySelector('h1 span');
+      if (countSpan) {
+        const n = Math.max(0, parseInt(countSpan.textContent.replace(/\D/g,''), 10) - 1);
+        countSpan.textContent = `(${n})`;
+        if (n === 0) {
+          const listDiv = document.querySelector('.flex.flex-col.gap-3');
+          if (listDiv) listDiv.innerHTML = `<p class="text-gray-500 text-center py-16">Your queue is empty! Add some albums to get started.</p>`;
+        }
+      }
+    } else {
+      navigate('queue');
+    }
+  } catch(e) { alert('Error removing from queue: ' + e.message); }
+}
+
+// ─── EDIT QUEUE ENTRY ─────────────────────────────────────────────────────────
+function menuEditQueue() {
+  if (!_cardMenuCtx) return;
+  const { title, artist, rowIndex, card } = _cardMenuCtx;
+  const esc = v => (v||'').replace(/"/g,'&quot;');
+  document.getElementById('edit-modal-body').innerHTML = `
+    <div class="flex flex-col gap-3">
+      <div><label class="text-xs text-gray-400 mb-1 block">Album Title</label><input class="input" id="eq-title" value="${esc(title)}"/></div>
+      <div><label class="text-xs text-gray-400 mb-1 block">Artist</label><input class="input" id="eq-artist" value="${esc(artist)}"/></div>
+      <div class="flex gap-3 pt-1">
+        <button class="btn-amber flex-1" onclick="saveQueueEdit()">Save Changes</button>
+        <button class="btn-gray px-4" onclick="closeEditModal()">Cancel</button>
+      </div>
+      <div id="em-status" class="text-xs text-center hidden"></div>
+    </div>`;
+  window._editQueueCtx = { rowIndex, oldTitle: title, oldArtist: artist, card };
+  document.getElementById('edit-modal').classList.remove('hidden');
+}
+async function saveQueueEdit() {
+  const ctx = window._editQueueCtx;
+  if (!ctx?.rowIndex) { alert('No album selected'); return; }
+  const status = document.getElementById('em-status');
+  const newTitle = document.getElementById('eq-title').value.trim();
+  const newArtist = document.getElementById('eq-artist').value.trim();
+  if (!newTitle) { alert('Title cannot be empty'); return; }
+  status.textContent = 'Saving…'; status.className = 'text-xs text-center text-gray-400';
+  status.classList.remove('hidden');
+  try {
+    await sheetsBatchUpdate([
+      { range: `AlbumList!A${ctx.rowIndex}`, values: [[newTitle]] },
+      { range: `AlbumList!B${ctx.rowIndex}`, values: [[newArtist]] },
+    ]);
+    // Update art cache key if title/artist changed
+    const oldKey = `${ctx.oldTitle}|${ctx.oldArtist}`;
+    const newKey = `${newTitle}|${newArtist}`;
+    if (oldKey !== newKey && _artCache[oldKey]) {
+      _artCache[newKey] = _artCache[oldKey];
+      delete _artCache[oldKey];
+    }
+    // Update card DOM in-place
+    if (ctx.card && ctx.card.isConnected) {
+      const titleEl = ctx.card.querySelector('.text-white.font-semibold');
+      if (titleEl) titleEl.textContent = newTitle;
+      const artistEl = ctx.card.querySelector('.text-gray-400.text-sm.mt-1');
+      if (artistEl) artistEl.textContent = newArtist;
+      const artEl = ctx.card.querySelector('.art-placeholder');
+      if (artEl) { artEl.dataset.title = newTitle; artEl.dataset.artist = newArtist; }
+      // Update ⋮ button onclick with new title/artist
+      const menuBtn = ctx.card.querySelector('button[title="Options"]');
+      if (menuBtn) {
+        const escAttr = s => (s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+        menuBtn.setAttribute('onclick', `event.stopPropagation();showCardMenu(this,'queue','${escAttr(newTitle)}','${escAttr(newArtist)}',${ctx.rowIndex})`);
+      }
+    }
+    status.textContent = '✓ Saved!'; status.className = 'text-xs text-center text-green-400';
+    setTimeout(closeEditModal, 700);
+  } catch(e) { status.textContent = '✗ ' + e.message; status.className = 'text-xs text-center text-red-400'; }
 }
 
 // ─── EDIT ALBUM MODAL ─────────────────────────────────────────────────────────
@@ -589,12 +756,24 @@ function openEditModal(a) {
   document.getElementById('edit-modal').classList.remove('hidden');
 }
 function closeEditModal() { document.getElementById('edit-modal').classList.add('hidden'); }
+function showReview(rowIndex) {
+  const a = (window._libraryAlbums||[]).find(x => x.rowIndex === rowIndex);
+  if (!a) return;
+  const title = cleanTitle(a.AlbumTitle||'');
+  document.getElementById('review-modal-title').textContent = title;
+  document.getElementById('review-modal-artist').textContent = a.Artist||'';
+  document.getElementById('review-modal-rating').textContent = a.Rating ? `★ ${a.Rating}/10` : '';
+  document.getElementById('review-modal-body').textContent = a.Review||'';
+  document.getElementById('review-modal').classList.remove('hidden');
+}
+function closeReviewModal() { document.getElementById('review-modal').classList.add('hidden'); }
 async function saveEditAlbum() {
   const a = window._editAlbum;
   if (!a?.rowIndex) { alert('No album selected'); return; }
   const status = document.getElementById('em-status');
   status.textContent = 'Saving…'; status.className = 'text-xs text-center text-gray-400';
   status.classList.remove('hidden');
+  const oldRating = Number(a.Rating) || 0;
   const vals = {
     AlbumTitle: (document.getElementById('em-title').value.trim() + (needsRelisten(a.AlbumTitle)?'*':'')),
     Artist:     document.getElementById('em-artist').value.trim(),
@@ -605,6 +784,7 @@ async function saveEditAlbum() {
     Review:     document.getElementById('em-review').value.trim(),
     WouldReplay: document.getElementById('em-replay').value,
   };
+  const newRating = Number(vals.Rating) || 0;
   try {
     const rows = await sheetsGet('Ranked albums!A1:Z1');
     const headers = rows[0] || [];
@@ -618,14 +798,54 @@ async function saveEditAlbum() {
     const albums = window._libraryAlbums || [];
     const found = albums.find(al => al.rowIndex === a.rowIndex);
     if (found) Object.assign(found, vals);
+
+    // If rating changed, reposition the album within the new rating group
+    if (newRating && oldRating && newRating !== oldRating) {
+      const peers = albums.filter(al => Number(al.Rating) === newRating && al.rowIndex !== a.rowIndex);
+      let targetRowIndex = null;
+      if (peers.length) {
+        if (newRating < oldRating) {
+          // Downgraded → top of new rating group (best-ranked among peers)
+          targetRowIndex = Math.min(...peers.map(al => al.rowIndex));
+        } else {
+          // Upgraded → bottom of new rating group (worst-ranked among peers) + 1
+          targetRowIndex = Math.max(...peers.map(al => al.rowIndex)) + 1;
+        }
+      }
+      if (targetRowIndex !== null && targetRowIndex !== a.rowIndex) {
+        status.textContent = 'Repositioning…';
+        await moveSheetRowTo('Ranked albums', a.rowIndex, targetRowIndex);
+        // Update in-memory rowIndex values for all affected albums
+        const movingDown = targetRowIndex > a.rowIndex;
+        const oldIdx = a.rowIndex;
+        albums.forEach(al => {
+          if (al.rowIndex === oldIdx) {
+            al.rowIndex = movingDown ? targetRowIndex - 1 : targetRowIndex;
+          } else if (movingDown && al.rowIndex > oldIdx && al.rowIndex < targetRowIndex) {
+            al.rowIndex--;
+          } else if (!movingDown && al.rowIndex >= targetRowIndex && al.rowIndex < oldIdx) {
+            al.rowIndex++;
+          }
+        });
+        albums.sort((x, y) => x.rowIndex - y.rowIndex);
+      }
+    }
+
     status.textContent = '✓ Saved!'; status.className = 'text-xs text-center text-green-400';
     setTimeout(() => { closeEditModal(); if (S.route==='library') filterLibrary(); else render(); }, 800);
   } catch(e) { status.textContent = '✗ ' + e.message; status.className = 'text-xs text-center text-red-400'; }
 }
 document.addEventListener('click', hideCardMenu);
 
+// Opens an image search pre-filled with the album so manual art entry is "pick a result, copy
+// the image address, paste" instead of a from-scratch hunt. Pure UX helper — doesn't touch how
+// art is matched/scored anywhere else.
+function _openArtSearch(title, artist) {
+  window.open(`https://www.google.com/search?tbm=isch&q=${encodeURIComponent(artist + ' ' + title + ' album cover')}`, '_blank');
+}
 async function setQueueArtUrl(rowIndex, title, artist) {
   const current = _artCache[`${title}|${artist}`] || '';
+  if (!current && confirm(`Search Google Images for "${title}" cover art?\n\nClick Cancel if you already have an image URL — you'll paste it on the next screen either way.`)) _openArtSearch(title, artist);
   const url = prompt('Paste a cover image URL (leave blank to clear):\n(Right-click an album cover online → Copy Image Address)', current);
   if (url === null) return;
   const trimmed = url.trim();
@@ -635,11 +855,19 @@ async function setQueueArtUrl(rowIndex, title, artist) {
   } catch(e) { alert('Error saving: ' + e.message); }
 }
 
-async function setLibraryArtUrl(title, artist) {
+async function setLibraryArtUrl(rowIndex, title, artist) {
   const current = _artCache[`${title}|${artist}`] || '';
+  if (!current && confirm(`Search Google Images for "${title}" cover art?\n\nClick Cancel if you already have an image URL — you'll paste it on the next screen either way.`)) _openArtSearch(title, artist);
   const url = prompt('Paste a cover image URL (leave blank to clear):\n(Right-click an album cover online → Copy Image Address)', current);
   if (url === null) return;
-  _applyArtUrl(title, artist, url.trim());
+  const trimmed = url.trim();
+  try {
+    // Persist to the "Ranked albums" sheet (ArtUrl column), not just the in-memory cache —
+    // without this the edit looked like it worked but got silently overwritten by whatever
+    // was still on the sheet the next time art was (re)loaded from it.
+    await updateAlbum(rowIndex, { ArtUrl: trimmed });
+    _applyArtUrl(title, artist, trimmed);
+  } catch(e) { alert('Error saving: ' + e.message); }
 }
 
 async function getSheetId(sheetName) {
@@ -657,6 +885,119 @@ async function deleteAlbumListRow(rowIndex) {
     { method:'POST', headers:{ Authorization:`Bearer ${S.token}`, 'Content-Type':'application/json' },
       body: JSON.stringify({ requests:[{ deleteDimension:{ range:{ sheetId, dimension:'ROWS', startIndex:rowIndex-1, endIndex:rowIndex } } }] }) });
   if (!r.ok) { const t=await r.text(); throw new Error(`Delete error: ${t}`); }
+}
+
+// Swaps a single data row with its immediate neighbor by moving it one position up/down in the
+// actual sheet (preserves every column + any formatting — not a cell-by-cell value copy, which
+// would risk dropping columns this app doesn't know about). rowIndex is 1-based (row 2 = first
+// data row, since row 1 is the header).
+//
+// Google's moveDimension destinationIndex is computed against the sheet BEFORE the source row is
+// removed. For a single-row move (source = [i, i+1)):
+//   - moving up by one (swap with i-1):   destinationIndex = i - 1
+//   - moving down by one (swap with i+1): destinationIndex = i + 2
+// (Verified against Google's own example: array [0,1,2,3,4], source=[1,3), destination=4 → result
+// [0,3,1,2,4] — i.e. destinationIndex is measured in the original, pre-removal index space.)
+async function moveSheetRow(sheetName, rowIndex, direction) {
+  const sheetId = await getSheetId(sheetName);
+  if (sheetId === null) throw new Error(sheetName + ' sheet not found');
+  const i = rowIndex - 1; // 0-based index of this row
+  if (direction === 'up' && i <= 1) return; // already the first data row — never move above the header
+  const destinationIndex = direction === 'up' ? i - 1 : i + 2;
+  const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${S.sheetId}:batchUpdate`,
+    { method:'POST', headers:{ Authorization:`Bearer ${S.token}`, 'Content-Type':'application/json' },
+      body: JSON.stringify({ requests:[{ moveDimension:{
+        source: { sheetId, dimension:'ROWS', startIndex:i, endIndex:i+1 },
+        destinationIndex
+      } }] }) });
+  if (!r.ok) { const t=await r.text(); throw new Error(`Move error: ${t}`); }
+}
+
+async function moveLibraryRow(rowIndex, direction) {
+  try {
+    await moveSheetRow('Ranked albums', rowIndex, direction);
+    // Swap rowIndex values in-memory — no full page reload needed
+    const albums = window._libraryAlbums || [];
+    const idx = albums.findIndex(a => a.rowIndex === rowIndex);
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (idx >= 0 && swapIdx >= 0 && swapIdx < albums.length) {
+      const tmp = albums[idx].rowIndex;
+      albums[idx].rowIndex = albums[swapIdx].rowIndex;
+      albums[swapIdx].rowIndex = tmp;
+      albums.sort((a, b) => a.rowIndex - b.rowIndex);
+    }
+    filterLibrary();
+  } catch(e) { alert('Error reordering: ' + e.message); }
+}
+
+async function moveQueueRow(rowIndex, direction) {
+  try {
+    await moveSheetRow('AlbumList', rowIndex, direction);
+    render();
+  } catch(e) { alert('Error reordering: ' + e.message); }
+}
+
+// Jumps a row directly to an arbitrary target row in one API call, instead of clicking ▲▼
+// repeatedly. targetRowIndex is 1-based, same convention as rowIndex (row 2 = first data row).
+// Generalizes the same moveDimension math used for single-step moves above:
+//   - moving up   (targetRowIndex < rowIndex): destinationIndex = targetRowIndex - 1
+//   - moving down (targetRowIndex > rowIndex): destinationIndex = targetRowIndex
+// (Single-step up/down are just this formula with targetRowIndex = rowIndex∓1 — same source range,
+// same destinationIndex shape, just generalized from a fixed ±1 to an arbitrary distance.)
+async function moveSheetRowTo(sheetName, rowIndex, targetRowIndex) {
+  if (targetRowIndex === rowIndex) return;
+  const sheetId = await getSheetId(sheetName);
+  if (sheetId === null) throw new Error(sheetName + ' sheet not found');
+  const i = rowIndex - 1;
+  const destinationIndex = targetRowIndex < rowIndex ? targetRowIndex - 1 : targetRowIndex;
+  const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${S.sheetId}:batchUpdate`,
+    { method:'POST', headers:{ Authorization:`Bearer ${S.token}`, 'Content-Type':'application/json' },
+      body: JSON.stringify({ requests:[{ moveDimension:{
+        source: { sheetId, dimension:'ROWS', startIndex:i, endIndex:i+1 },
+        destinationIndex
+      } }] }) });
+  if (!r.ok) { const t=await r.text(); throw new Error(`Move error: ${t}`); }
+}
+
+async function moveLibraryRowTo(rowIndex) {
+  const total = (window._libraryAlbums||[]).length;
+  const currentRank = rowIndex - 1;
+  const input = prompt(`Move to rank # (1–${total}):`, currentRank);
+  if (input === null) return;
+  const targetRank = parseInt(input, 10);
+  if (!targetRank || targetRank < 1 || targetRank > total) { alert(`Enter a rank between 1 and ${total}.`); return; }
+  if (targetRank === currentRank) return;
+  const targetRowIndex = targetRank + 1;
+  try {
+    await moveSheetRowTo('Ranked albums', rowIndex, targetRowIndex);
+    // Update rowIndex values in-memory for all shifted albums
+    const albums = window._libraryAlbums || [];
+    const movingDown = targetRowIndex > rowIndex;
+    albums.forEach(a => {
+      if (a.rowIndex === rowIndex) {
+        a.rowIndex = movingDown ? targetRowIndex - 1 : targetRowIndex;
+      } else if (movingDown && a.rowIndex > rowIndex && a.rowIndex < targetRowIndex) {
+        a.rowIndex--;
+      } else if (!movingDown && a.rowIndex >= targetRowIndex && a.rowIndex < rowIndex) {
+        a.rowIndex++;
+      }
+    });
+    albums.sort((a, b) => a.rowIndex - b.rowIndex);
+    filterLibrary();
+  } catch(e) { alert('Error reordering: ' + e.message); }
+}
+
+async function moveQueueRowTo(rowIndex, total) {
+  const currentRank = rowIndex - 1;
+  const input = prompt(`Move to position # (1–${total}):`, currentRank);
+  if (input === null) return;
+  const targetRank = parseInt(input, 10);
+  if (!targetRank || targetRank < 1 || targetRank > total) { alert(`Enter a position between 1 and ${total}.`); return; }
+  if (targetRank === currentRank) return;
+  try {
+    await moveSheetRowTo('AlbumList', rowIndex, targetRank + 1);
+    render();
+  } catch(e) { alert('Error reordering: ' + e.message); }
 }
 
 async function addToRankedAlbums(album) {
@@ -716,7 +1057,51 @@ async function testArtApi() {
   }
 }
 
+// ─── RATE-LIMITED FETCH (iTunes + Deezer) ────────────────────────────────────
+// Live network logs during a real bulk-fetch run showed nearly every iTunes AND
+// Deezer request coming back 503 Service Unavailable after the first couple
+// dozen calls. Apple documents the iTunes Search API at ~20 calls/minute —
+// the old code could fire a dozen+ simultaneous requests every few hundred ms
+// (bulk fetcher's parallel chunks, PLUS the lazy art loader firing one fetch
+// per missing album on every page render), which blows past that instantly.
+// These two helpers funnel EVERY call to each API through a single queue with
+// a minimum gap between requests, and retry once or twice on 503/429/network
+// failure before giving up. This is pure I/O pacing — no matching logic here.
+async function _fetchWithRetry(url, retries) {
+  retries = retries == null ? 2 : retries;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const resp = await fetch(url);
+      if ((resp.status === 503 || resp.status === 429) && attempt < retries) {
+        await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
+        continue;
+      }
+      return resp;
+    } catch (e) {
+      if (attempt < retries) { await new Promise(r => setTimeout(r, 1500 * (attempt + 1))); continue; }
+      throw e;
+    }
+  }
+}
+let _itunesChain = Promise.resolve();
+function fetchItunes(url) {
+  const task = _itunesChain.then(() => _fetchWithRetry(url));
+  _itunesChain = task.catch(() => {}).then(() => new Promise(r => setTimeout(r, 3200)));
+  return task;
+}
+let _deezerChain = Promise.resolve();
+function fetchDeezer(url) {
+  const task = _deezerChain.then(() => _fetchWithRetry(url));
+  _deezerChain = task.catch(() => {}).then(() => new Promise(r => setTimeout(r, 700)));
+  return task;
+}
+
 // ─── SHARED ART HELPERS ──────────────────────────────────────────────────────
+// Strips stray formatting junk (asterisks, curly quotes, doubled whitespace) from the title/artist
+// BEFORE it's used to build the literal search query sent to iTunes/Deezer. This only cleans up
+// what gets typed into the search box — it never touches _artNorm/_artTitleScore/_artArtistScore,
+// so how a returned result is scored and matched is completely unchanged.
+const _artQueryClean = s => (s||'').replace(/\*+/g, '').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').trim();
 const _artNorm = s => (s||'')
   .normalize('NFKD').replace(/[̀-ͯ]/g,'') // ö→o, é→e, ü→u, etc.
   .toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
@@ -750,8 +1135,17 @@ const _artArtistScore = (nal, ra) => {
 };
 
 // ─── ITUNES ART FETCH ────────────────────────────────────────────────────────
+// iTunes CDN supports any resolution — just swap the dimension segment in the URL.
+// artworkUrl100 = 100×100 thumbnail; 600×600 is the standard hi-res album cover size.
+function _itunesHiRes(url) {
+  if (!url) return url;
+  return url.replace(/\d+x\d+bb/, '600x600bb');
+}
+
 async function fetchArtFromItunes(title, artist) {
   try {
+    title = _artQueryClean(title);
+    artist = _artQueryClean(artist);
     const ntl = _artNorm(title);
     const nal = _artNorm(artist);
     const fw = _artFirstSig(nal);
@@ -768,7 +1162,7 @@ async function fetchArtFromItunes(title, artist) {
     };
 
     const trySearch = async (q) => {
-      const resp = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&media=music&entity=album&limit=10`);
+      const resp = await fetchItunes(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&media=music&entity=album&limit=10`);
       if (!resp.ok) return [];
       return (await resp.json()).results || [];
     };
@@ -784,16 +1178,18 @@ async function fetchArtFromItunes(title, artist) {
     if (!match && stripped !== title) match = findBest(await trySearch(`${artist} ${stripped}`));
 
     if (!match) return null;
-    return match.artworkUrl100 || match.artworkUrl60 || null;
+    return _itunesHiRes(match.artworkUrl100 || match.artworkUrl60) || null;
   } catch(e) { return null; }
 }
 
 // ─── DEEZER ART FETCH (fallback) ─────────────────────────────────────────────
 async function fetchArtFromDeezer(title, artist) {
   try {
+    title = _artQueryClean(title);
+    artist = _artQueryClean(artist);
     const ntl = _artNorm(title);
     const nal = _artNorm(artist);
-    const resp = await fetch(`https://api.deezer.com/search/album?q=${encodeURIComponent(artist + ' ' + title)}&limit=10`);
+    const resp = await fetchDeezer(`https://api.deezer.com/search/album?q=${encodeURIComponent(artist + ' ' + title)}&limit=10`);
     if (!resp.ok) return null;
     const data = await resp.json();
     if (!data.data?.length) return null;
@@ -809,8 +1205,105 @@ async function fetchArtFromDeezer(title, artist) {
   } catch(e) { return null; }
 }
 
+// ─── WIKIPEDIA ART FETCH (built-in 3rd fallback) ─────────────────────────────
+// Catches the deep cuts, mixtapes, and older/regional releases that iTunes and
+// Deezer's catalogs don't carry, without requiring anyone to do a manual
+// browse-and-paste lookup — same idea as the ⋮ "search for art" helper below,
+// just automated and run as part of the normal bulk-fetch passes so every user
+// of this app benefits, not just whoever happens to be doing it by hand.
+// Wikipedia's plain search API finds the page; the REST summary endpoint's
+// originalimage/thumbnail is what actually surfaces the lead image, INCLUDING
+// non-free cover art — the older Action API's prop=pageimages endpoint omits
+// non-free files entirely, which is most album covers, so it's deliberately
+// not used here. Confidence is checked against the page's own free-text
+// description (does it read as an album/EP/mixtape, does the artist's name
+// show up in it) — that's a different kind of check than _artNorm/
+// _artTitleScore/_artArtistScore (which assume structured title/artist
+// fields), so it's kept fully separate. iTunes/Deezer matching is untouched.
+let _wikiChain = Promise.resolve();
+function fetchWiki(url) {
+  const task = _wikiChain.then(() => _fetchWithRetry(url));
+  _wikiChain = task.catch(() => {}).then(() => new Promise(r => setTimeout(r, 400)));
+  return task;
+}
+const _wikiStops = new Set(['and','the','with','feat','featuring','of','a','vs','x']);
+const _wikiLooksLikeAlbum = desc => /\balbum\b|\bep\b|\bmixtape\b|extended play|\brecord\b/i.test(desc||'');
+const _wikiArtistMatch = (artist, desc) => {
+  const d = (desc||'').toLowerCase();
+  const words = _artNorm(artist).split(' ').filter(w => w.length > 2 && !_wikiStops.has(w));
+  if (!words.length) return false;
+  return words.some(w => d.includes(w));
+};
+async function fetchArtFromWikipedia(title, artist) {
+  try {
+    title = _artQueryClean(title);
+    artist = _artQueryClean(artist);
+    const sResp = await fetchWiki(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(artist + ' ' + title + ' album')}&format=json&srlimit=1&origin=*`);
+    if (!sResp.ok) return null;
+    const sData = await sResp.json();
+    const pageTitle = sData.query?.search?.[0]?.title;
+    if (!pageTitle) return null;
+    const rResp = await fetchWiki(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(pageTitle)}`);
+    if (!rResp.ok) return null;
+    const rData = await rResp.json();
+    const desc = `${rData.description||''} ${rData.extract||''}`;
+    if (!_wikiLooksLikeAlbum(desc)) return null;
+    if (!_wikiArtistMatch(artist, desc)) return null;
+    return rData.originalimage?.source || rData.thumbnail?.source || null;
+  } catch(e) { return null; }
+}
+
+// ─── COVER ART ARCHIVE ART FETCH (built-in 4th fallback) ─────────────────────
+// MusicBrainz has the broadest catalog of any open music database — indie, underground,
+// international, self-released, everything — and the Cover Art Archive sits on top of it
+// specifically for cover images. No API key required. CORS-open.
+// Flow: MusicBrainz release search → best-confidence release ID → CAA front image URL.
+// Confidence check: require the recording artist to appear in the credited-artist field
+// of the top result (MusicBrainz returns structured data so we can compare directly,
+// not just look at free text like the Wikipedia pass does).
+let _mbChain = Promise.resolve();
+function fetchMB(url) {
+  const task = _mbChain.then(() => _fetchWithRetry(url));
+  // MusicBrainz asks for ≥1s between requests in their API guidelines
+  _mbChain = task.catch(() => {}).then(() => new Promise(r => setTimeout(r, 1100)));
+  return task;
+}
+async function fetchArtFromCoverArtArchive(title, artist) {
+  try {
+    title = _artQueryClean(title);
+    artist = _artQueryClean(artist);
+    const ntl = _artNorm(title);
+    const nal = _artNorm(artist);
+    // MusicBrainz release search — returns JSON with release list + artist credits
+    const sResp = await fetchMB(
+      `https://musicbrainz.org/ws/2/release/?query=release:${encodeURIComponent(title)}+artist:${encodeURIComponent(artist)}&fmt=json&limit=5`
+    );
+    if (!sResp.ok) return null;
+    const sData = await sResp.json();
+    const releases = sData.releases || [];
+    if (!releases.length) return null;
+    // Pick the highest-scored release whose artist name has reasonable overlap
+    let mbid = null;
+    for (const rel of releases) {
+      const relTitle = _artNorm(rel.title || '');
+      const relArtist = _artNorm(
+        (rel['artist-credit'] || []).map(c => c.artist?.name || c.name || '').join(' ')
+      );
+      const ts = _artTitleScore(ntl, relTitle);
+      const as = _artArtistScore(nal, relArtist);
+      if (ts >= 5 && as >= 2) { mbid = rel.id; break; }
+    }
+    if (!mbid) return null;
+    // Cover Art Archive: /release/{mbid}/front redirects to the actual image (404 if none)
+    const imgResp = await fetchMB(`https://coverartarchive.org/release/${mbid}/front`);
+    if (!imgResp.ok) return null;
+    // The redirect lands on the real image URL — return it directly
+    return imgResp.url || null;
+  } catch(e) { return null; }
+}
+
 // ─── BULK ART FETCHER ────────────────────────────────────────────────────────
-async function bulkFetchArt() {
+async function bulkFetchArt(quickMode) {
   const modal = document.getElementById('bulk-art-modal');
   const statusEl = document.getElementById('bulk-art-status');
   const barEl = document.getElementById('bulk-art-bar');
@@ -822,22 +1315,33 @@ async function bulkFetchArt() {
   statusEl.textContent = 'Loading albums from sheet…';
   countEl.textContent = '';
 
+  _bulkFetchActive = true; // suppress the lazy art loader's competing Deezer calls for the duration
   try {
-    // 1. Clear stale local cache so old bad URLs don't interfere
-    try { localStorage.removeItem(ART_LS_KEY); } catch(e) {}
-    for (const k of Object.keys(_artCache)) delete _artCache[k];
+    // Quick mode (only fetch albums currently missing art) deliberately skips the cache
+    // wipe below and the "has art?" filter uses the sheet's own column J value, not the
+    // matching logic — so this never touches how a match is scored, only which albums
+    // get looked at at all.
+    if (!quickMode) {
+      // 1. Clear stale local cache so old bad URLs don't interfere
+      try { localStorage.removeItem(ART_LS_KEY); } catch(e) {}
+      for (const k of Object.keys(_artCache)) delete _artCache[k];
+    }
 
     // 2. Get all albums (getAllAlbums re-seeds _artCache from the old sheet — clear it again
     //    immediately so stale wrong URLs don't survive into the UI after this fetch)
     const allAlbums = await getAllAlbums();
-    try { localStorage.removeItem(ART_LS_KEY); } catch(e) {}
-    for (const k of Object.keys(_artCache)) delete _artCache[k];
+    if (!quickMode) {
+      try { localStorage.removeItem(ART_LS_KEY); } catch(e) {}
+      for (const k of Object.keys(_artCache)) delete _artCache[k];
+    }
 
-    // 3. All albums with title + artist
+    // 3. All albums with title + artist — in quick mode, only ones still missing art
     const missing = allAlbums.filter(a => {
       const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
       const artist = (a.Artist||'').trim();
-      return title && artist;
+      if (!title || !artist) return false;
+      if (quickMode && a._artUrl) return false; // already has art in the sheet — skip
+      return true;
     });
 
     if (!missing.length) {
@@ -956,7 +1460,7 @@ async function bulkFetchArt() {
         countEl.textContent = `Artist ${adone}/${artists.length}: ${artist} · found: ${found.length}`;
         try {
           // Step 1: find artist ID
-          const sResp = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artist)}&media=music&entity=musicArtist&limit=3`);
+          const sResp = await fetchItunes(`https://itunes.apple.com/search?term=${encodeURIComponent(_artQueryClean(artist))}&media=music&entity=musicArtist&limit=3`);
           if (!sResp.ok) { await new Promise(r=>setTimeout(r,400)); continue; }
           const sData = await sResp.json();
           if (!sData.results?.length) { await new Promise(r=>setTimeout(r,400)); continue; }
@@ -967,7 +1471,7 @@ async function bulkFetchArt() {
           if (!artistId) { await new Promise(r=>setTimeout(r,400)); continue; }
           await new Promise(r=>setTimeout(r,350));
           // Step 2: get all their albums (up to 200)
-          const lResp = await fetch(`https://itunes.apple.com/lookup?id=${artistId}&entity=album&limit=200`);
+          const lResp = await fetchItunes(`https://itunes.apple.com/lookup?id=${artistId}&entity=album&limit=200`);
           if (!lResp.ok) { await new Promise(r=>setTimeout(r,400)); continue; }
           const lData = await lResp.json();
           const catalog = (lData.results||[]).filter(r => r.wrapperType === 'collection');
@@ -983,7 +1487,7 @@ async function bulkFetchArt() {
             }
             // Artist confirmed — require 80%+ word overlap (score ≥ 8) or exact match (10)
             if (bestMatch && bestScore >= 8) {
-              const url = bestMatch.artworkUrl100 || bestMatch.artworkUrl60;
+              const url = _itunesHiRes(bestMatch.artworkUrl100 || bestMatch.artworkUrl60);
               if (url) {
                 const key = `${title}|${artist}`;
                 _artCache[key] = url;
@@ -1003,6 +1507,82 @@ async function bulkFetchArt() {
       }
     }
 
+    // 7. Wikipedia fallback (3rd fallback overall) for anything iTunes + Deezer still missed
+    const stillMissing2 = missing.filter(a => {
+      const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
+      const artist = (a.Artist||'').trim();
+      return !_artCache[`${title}|${artist}`];
+    });
+    if (stillMissing2.length) {
+      statusEl.textContent = `Wikipedia pass: checking ${stillMissing2.length} remaining…`;
+      const W_CHUNK = 2;
+      let wchecked = 0;
+      const wFound = [];
+      for (let i = 0; i < stillMissing2.length; i += W_CHUNK) {
+        const chunk = stillMissing2.slice(i, i + W_CHUNK);
+        const wResults = await Promise.all(chunk.map(async a => {
+          const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
+          const artist = (a.Artist||'').trim();
+          const url = await fetchArtFromWikipedia(title, artist);
+          return { a, title, artist, url };
+        }));
+        for (const { a, title, artist, url } of wResults) {
+          if (url) {
+            const key = `${title}|${artist}`;
+            _artCache[key] = url;
+            persistArtUrl(key, url);
+            wFound.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
+          }
+        }
+        wchecked += chunk.length;
+        barEl.style.width = (70 + Math.round((wchecked / stillMissing2.length) * 20)) + '%';
+        countEl.textContent = `Wikipedia: ${wchecked}/${stillMissing2.length} · total found: ${found.length + wFound.length}`;
+      }
+      if (wFound.length) {
+        statusEl.textContent = `Saving ${wFound.length} Wikipedia matches…`;
+        await sheetsBatchUpdate(wFound);
+        found.push(...wFound);
+      }
+    }
+
+    // 8. Cover Art Archive fallback for anything still missing after Wikipedia
+    const stillMissing3 = missing.filter(a => {
+      const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
+      const artist = (a.Artist||'').trim();
+      return !_artCache[`${title}|${artist}`];
+    });
+    if (stillMissing3.length) {
+      statusEl.textContent = `Cover Art Archive pass for ${stillMissing3.length} remaining…`;
+      const C_CHUNK = 1; // MusicBrainz asks for serial requests; CAA piggybacks
+      let cchecked = 0;
+      const cFound = [];
+      for (let i = 0; i < stillMissing3.length; i += C_CHUNK) {
+        const chunk = stillMissing3.slice(i, i + C_CHUNK);
+        const cResults = await Promise.all(chunk.map(async a => {
+          const title = (a.AlbumTitle||'').replace(/\*$/,'').trim();
+          const artist = (a.Artist||'').trim();
+          const url = await fetchArtFromCoverArtArchive(title, artist);
+          return { a, title, artist, url };
+        }));
+        for (const { a, title, artist, url } of cResults) {
+          if (url) {
+            const key = `${title}|${artist}`;
+            _artCache[key] = url;
+            persistArtUrl(key, url);
+            cFound.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
+          }
+        }
+        cchecked += chunk.length;
+        barEl.style.width = (90 + Math.round((cchecked / stillMissing3.length) * 10)) + '%';
+        countEl.textContent = `Cover Art Archive: ${cchecked}/${stillMissing3.length} · total found: ${found.length + cFound.length}`;
+      }
+      if (cFound.length) {
+        statusEl.textContent = `Saving ${cFound.length} Cover Art Archive matches…`;
+        await sheetsBatchUpdate(cFound);
+        found.push(...cFound);
+      }
+    }
+
     statusEl.textContent = `✅ Done! Found art for ${found.length} of ${missing.length} albums.`;
     barEl.style.width = '100%';
     countEl.textContent = found.length < missing.length
@@ -1013,11 +1593,215 @@ async function bulkFetchArt() {
   } catch(e) {
     statusEl.textContent = '❌ Error: ' + e.message;
     closeBtn.classList.remove('hidden');
+  } finally {
+    _bulkFetchActive = false;
+    loadLazyArt(); // catch up on any art the lazy loader skipped while suppressed
+  }
+}
+
+// ─── BULK ART FETCHER (QUEUE) ────────────────────────────────────────────────
+// Mirrors bulkFetchArt() above but targets the Queue ("AlbumList" sheet, column C) instead of the
+// Library ("Ranked albums" sheet, column J/getAllAlbums()). Reuses the exact same fetch + matching
+// functions (fetchArtFromItunes/fetchArtFromDeezer/fetchArtFromWikipedia, which call into
+// _artNorm/_artTitleScore/_artArtistScore) untouched — only the source list (getAlbumList) and the
+// sheet range written back to (AlbumList!C{rowIndex}) differ. Skips the slower iTunes
+// artist-catalog pass that bulkFetchArt() has as an extra fallback — iTunes+Deezer+Wikipedia is
+// plenty for queue-sized lists, and keeps a manual run snappy. Albums still missing art can always
+// be set by hand via ⋮.
+async function bulkFetchQueueArt(quickMode) {
+  const modal = document.getElementById('bulk-art-modal');
+  const statusEl = document.getElementById('bulk-art-status');
+  const barEl = document.getElementById('bulk-art-bar');
+  const countEl = document.getElementById('bulk-art-count');
+  const closeBtn = document.getElementById('bulk-art-close');
+  modal.classList.remove('hidden');
+  closeBtn.classList.add('hidden');
+  barEl.style.width = '0%';
+  statusEl.textContent = 'Loading queue from sheet…';
+  countEl.textContent = '';
+
+  _bulkFetchActive = true; // suppress the lazy art loader's competing Deezer calls for the duration
+  try {
+    const list = await getAlbumList();
+    const missing = list.filter(a => {
+      if (!a.title || !a.artist) return false;
+      if (quickMode && a.artUrl) return false; // already has art saved — skip
+      return true;
+    });
+
+    if (!missing.length) {
+      statusEl.textContent = '✅ No albums to fetch art for!';
+      barEl.style.width = '100%';
+      closeBtn.classList.remove('hidden');
+      return;
+    }
+
+    // Re-checking everyone (not quick mode): clear only THIS list's cache entries so a stale
+    // wrong URL doesn't block a fresh lookup — never touches Library's cache keys.
+    if (!quickMode) {
+      for (const a of missing) delete _artCache[`${a.title}|${a.artist}`];
+    }
+
+    statusEl.textContent = `iTunes pass: fetching art for ${missing.length} albums…`;
+    countEl.textContent = `0 / ${missing.length}`;
+
+    const CHUNK = 3;
+    const found = [];
+    let checked = 0;
+
+    for (let i = 0; i < missing.length; i += CHUNK) {
+      const chunk = missing.slice(i, i + CHUNK);
+      const results = await Promise.all(chunk.map(async a => {
+        const url = await fetchArtFromItunes(a.title, a.artist);
+        return { a, url };
+      }));
+      for (const { a, url } of results) {
+        if (url) {
+          const key = `${a.title}|${a.artist}`;
+          _artCache[key] = url;
+          persistArtUrl(key, url);
+          found.push({ range: `AlbumList!C${a.rowIndex}`, values: [[url]] });
+        }
+      }
+      checked += chunk.length;
+      barEl.style.width = Math.round((checked / missing.length) * 35) + '%'; // iTunes = first 35%
+      countEl.textContent = `iTunes: ${checked}/${missing.length} checked · ${found.length} found`;
+      if (i + CHUNK < missing.length) await new Promise(r => setTimeout(r, 500));
+    }
+
+    if (found.length) {
+      statusEl.textContent = `Saving ${found.length} iTunes matches…`;
+      await sheetsBatchUpdate(found);
+    }
+
+    // Deezer fallback for anything iTunes missed
+    const notFound = missing.filter(a => !_artCache[`${a.title}|${a.artist}`]);
+    if (notFound.length) {
+      statusEl.textContent = `iTunes: ${found.length} found. Deezer pass for ${notFound.length} remaining…`;
+      const D_CHUNK = 4;
+      let dchecked = 0;
+      const dFound = [];
+      for (let i = 0; i < notFound.length; i += D_CHUNK) {
+        const chunk = notFound.slice(i, i + D_CHUNK);
+        const dResults = await Promise.all(chunk.map(async a => {
+          const url = await fetchArtFromDeezer(a.title, a.artist);
+          return { a, url };
+        }));
+        for (const { a, url } of dResults) {
+          if (url) {
+            const key = `${a.title}|${a.artist}`;
+            _artCache[key] = url;
+            persistArtUrl(key, url);
+            dFound.push({ range: `AlbumList!C${a.rowIndex}`, values: [[url]] });
+          }
+        }
+        dchecked += chunk.length;
+        barEl.style.width = (35 + Math.round((dchecked / notFound.length) * 30)) + '%';
+        countEl.textContent = `Deezer: ${dchecked}/${notFound.length} · total found: ${found.length + dFound.length}`;
+        if (i + D_CHUNK < notFound.length) await new Promise(r => setTimeout(r, 300));
+      }
+      if (dFound.length) {
+        statusEl.textContent = `Saving ${dFound.length} Deezer matches…`;
+        await sheetsBatchUpdate(dFound);
+        found.push(...dFound);
+      }
+    }
+
+    // Wikipedia fallback for anything iTunes + Deezer still missed
+    const stillMissing = missing.filter(a => !_artCache[`${a.title}|${a.artist}`]);
+    if (stillMissing.length) {
+      statusEl.textContent = `Wikipedia pass for ${stillMissing.length} remaining…`;
+      const W_CHUNK = 2;
+      let wchecked = 0;
+      const wFound = [];
+      for (let i = 0; i < stillMissing.length; i += W_CHUNK) {
+        const chunk = stillMissing.slice(i, i + W_CHUNK);
+        const wResults = await Promise.all(chunk.map(async a => {
+          const url = await fetchArtFromWikipedia(a.title, a.artist);
+          return { a, url };
+        }));
+        for (const { a, url } of wResults) {
+          if (url) {
+            const key = `${a.title}|${a.artist}`;
+            _artCache[key] = url;
+            persistArtUrl(key, url);
+            wFound.push({ range: `AlbumList!C${a.rowIndex}`, values: [[url]] });
+          }
+        }
+        wchecked += chunk.length;
+        barEl.style.width = (65 + Math.round((wchecked / stillMissing.length) * 25)) + '%';
+        countEl.textContent = `Wikipedia: ${wchecked}/${stillMissing.length} · total found: ${found.length + wFound.length}`;
+      }
+      if (wFound.length) {
+        statusEl.textContent = `Saving ${wFound.length} Wikipedia matches…`;
+        await sheetsBatchUpdate(wFound);
+        found.push(...wFound);
+      }
+    }
+
+    // Cover Art Archive fallback for anything still missing after Wikipedia
+    const stillMissing2 = missing.filter(a => !_artCache[`${a.title}|${a.artist}`]);
+    if (stillMissing2.length) {
+      statusEl.textContent = `Cover Art Archive pass for ${stillMissing2.length} remaining…`;
+      const C_CHUNK = 1;
+      let cchecked = 0;
+      const cFound = [];
+      for (let i = 0; i < stillMissing2.length; i += C_CHUNK) {
+        const chunk = stillMissing2.slice(i, i + C_CHUNK);
+        const cResults = await Promise.all(chunk.map(async a => {
+          const url = await fetchArtFromCoverArtArchive(a.title, a.artist);
+          return { a, url };
+        }));
+        for (const { a, url } of cResults) {
+          if (url) {
+            const key = `${a.title}|${a.artist}`;
+            _artCache[key] = url;
+            persistArtUrl(key, url);
+            cFound.push({ range: `AlbumList!C${a.rowIndex}`, values: [[url]] });
+          }
+        }
+        cchecked += chunk.length;
+        barEl.style.width = (90 + Math.round((cchecked / stillMissing2.length) * 10)) + '%';
+        countEl.textContent = `Cover Art Archive: ${cchecked}/${stillMissing2.length} · total found: ${found.length + cFound.length}`;
+      }
+      if (cFound.length) {
+        statusEl.textContent = `Saving ${cFound.length} Cover Art Archive matches…`;
+        await sheetsBatchUpdate(cFound);
+        found.push(...cFound);
+      }
+    }
+
+    statusEl.textContent = `✅ Done! Found art for ${found.length} of ${missing.length} albums.`;
+    barEl.style.width = '100%';
+    countEl.textContent = found.length < missing.length
+      ? `${missing.length - found.length} album${missing.length - found.length !== 1 ? 's' : ''} not found — set those manually via ⋮`
+      : 'All albums have art!';
+    closeBtn.classList.remove('hidden');
+
+  } catch(e) {
+    statusEl.textContent = '❌ Error: ' + e.message;
+    closeBtn.classList.remove('hidden');
+  } finally {
+    _bulkFetchActive = false;
+    loadLazyArt(); // catch up on any art the lazy loader skipped while suppressed
   }
 }
 
 // ─── LAZY ART LOADER ─────────────────────────────────────────────────────────
+// Live network logs during a bulk-fetch run showed Deezer getting hammered by
+// duplicate requests for the SAME albums even after the fetchDeezer() throttle
+// was added. Root cause: bulkFetchArt() clears _artCache at the start (so old
+// bad URLs don't linger), but the Library page underneath the modal still has
+// its lazy-loader queuing one fetchAlbumArt()->Deezer call per still-missing
+// album. With the cache empty, every one of those is a real network call, and
+// it competes with the bulk fetcher's own later Deezer pass for the same
+// throttled queue. Since the bulk fetcher is about to fetch (and save) art for
+// these exact albums anyway, the lazy loader has nothing useful to do during a
+// bulk run — so it's suppressed for the duration via this flag, set/cleared by
+// bulkFetchArt() itself. Pure I/O contention fix, no matching logic touched.
+let _bulkFetchActive = false;
 function loadLazyArt() {
+  if (_bulkFetchActive) return;
   document.querySelectorAll('.art-placeholder:not([data-loaded])').forEach(div => {
     div.setAttribute('data-loaded', '1');
     const title = div.getAttribute('data-title') || '';
@@ -1039,7 +1823,11 @@ const _artPending = {};
 
 const ART_LS_KEY = 'vds_art_cache';
 function loadArtFromStorage() {
-  try { Object.assign(_artCache, JSON.parse(localStorage.getItem(ART_LS_KEY)||'{}')); } catch(e) {}
+  try {
+    const stored = JSON.parse(localStorage.getItem(ART_LS_KEY)||'{}');
+    Object.keys(stored).forEach(k => { stored[k] = _itunesHiRes(stored[k]); });
+    Object.assign(_artCache, stored);
+  } catch(e) {}
 }
 function persistArtUrl(key, url) {
   try {
@@ -1064,14 +1852,14 @@ async function fetchAlbumArt(title, artist) {
     try {
       const clean = s => (s||'').replace(/"/g,'');
       const q = encodeURIComponent(`artist:"${clean(artist)}" album:"${clean(title)}"`);
-      const resp = await fetch(`https://api.deezer.com/search/album?q=${q}&limit=8`);
+      const resp = await fetchDeezer(`https://api.deezer.com/search/album?q=${q}&limit=8`);
       if (!resp.ok) return null;
       const data = await resp.json();
       const albums = data.data || [];
       if (!albums.length) {
         // broader fallback: title + artist without quotes
         const q2 = encodeURIComponent(`${clean(title)} ${clean(artist)}`);
-        const resp2 = await fetch(`https://api.deezer.com/search/album?q=${q2}&limit=8`);
+        const resp2 = await fetchDeezer(`https://api.deezer.com/search/album?q=${q2}&limit=8`);
         if (!resp2.ok) return null;
         const data2 = await resp2.json();
         albums.push(...(data2.data || []));
@@ -1145,7 +1933,7 @@ function render() {
   const app = el('app');
   if (!S.clientId || !S.token) { app.innerHTML = renderSetup(); return; }
   if (!S.sheetId) { app.innerHTML = renderConnectSheet(); return; }
-  const pages = { home:renderHome, library:renderLibrary, completed:renderCompleted, stats:renderStats, add:renderAdd, ranking:renderRanking, calendar:renderCalendar, top10:renderTop10, relisten:renderRelisten, queue:renderQueue, recent:renderRecent, discover:renderDiscover };
+  const pages = { home:renderHome, library:renderLibrary, stats:renderStats, add:renderAdd, ranking:renderRanking, calendar:renderCalendar, top10:renderTop10, relisten:renderRelisten, queue:renderQueue, recent:renderRecent, discover:renderDiscover, aoty:renderAoty, community:renderCommunity };
   if (S.route.startsWith('album/')) { app.innerHTML = renderAlbumDetail(S.routeData); return; }
   if (S.route.startsWith('artist/')) {
     const name = decodeURIComponent(S.route.replace('artist/',''));
@@ -1289,6 +2077,29 @@ function promptSetGoal() {
   render();
 }
 
+function calcStreak(allAlbums) {
+  const ratedDates = new Set(
+    allAlbums
+      .filter(a => a.Rating && a.DateAssigned)
+      .map(a => normalizeDate(a.DateAssigned))
+      .filter(Boolean)
+  );
+  const todayStr = today();
+  const yest = new Date(todayStr); yest.setDate(yest.getDate() - 1);
+  const yesterdayStr = yest.toLocaleDateString('en-CA');
+  const ratedToday = ratedDates.has(todayStr);
+  // Start counting from today if rated, otherwise yesterday
+  const startStr = ratedToday ? todayStr : (ratedDates.has(yesterdayStr) ? yesterdayStr : null);
+  if (!startStr) return { streak: 0, ratedToday };
+  let streak = 0;
+  const d = new Date(startStr);
+  while (ratedDates.has(d.toLocaleDateString('en-CA'))) {
+    streak++;
+    d.setDate(d.getDate() - 1);
+  }
+  return { streak, ratedToday };
+}
+
 async function renderHomeGoalAndRecap() {
   let allAlbums = [];
   try { allAlbums = await getAllAlbums(); } catch(e) { allAlbums = []; }
@@ -1309,6 +2120,21 @@ async function renderHomeGoalAndRecap() {
 
   const goal = getListeningGoal();
   const monthName = new Date().toLocaleString('default', { month: 'long' });
+
+  // ── Streak widget ──
+  const { streak, ratedToday } = calcStreak(allAlbums);
+  const streakHtml = streak > 0 ? `
+  <div class="card mt-5 p-4 flex items-center gap-4" style="border-color:rgba(255,255,255,0.06)">
+    <div class="text-4xl leading-none">${streak >= 7 ? '🔥' : streak >= 3 ? '⚡' : '✨'}</div>
+    <div class="flex-1 min-w-0">
+      <div class="text-2xl font-black text-white">${streak} <span class="text-base font-semibold text-gray-400">day streak</span></div>
+      <div class="text-xs mt-0.5 ${ratedToday ? 'text-green-400' : 'text-amber-400'}">${ratedToday ? '✓ Rated today — keep it going!' : "Rate today's album to keep it going"}</div>
+    </div>
+    ${streak >= 30 ? `<div class="text-xs font-bold px-2 py-1 rounded-full" style="background:rgba(251,191,36,0.15);color:#fbbf24">🏆 ${streak}d</div>` : ''}
+  </div>` : `
+  <div class="mt-5 p-3 rounded-xl text-center" style="border:1px dashed rgba(255,255,255,0.08)">
+    <p class="text-xs text-gray-500">Rate an album each day to build a streak 🔥</p>
+  </div>`;
 
   // ── Listening goal widget ──
   let goalHtml = '';
@@ -1376,7 +2202,40 @@ async function renderHomeGoalAndRecap() {
     </div>`;
   }
 
-  return goalHtml + recapHtml;
+  // ── On This Day ──
+  const todayMD = today().slice(5); // MM-DD
+  const thisYearStr = String(new Date().getFullYear());
+  const onThisDay = completed.filter(a => {
+    const d = normalizeDate(a.DateAssigned);
+    return d && d.slice(5) === todayMD && d.slice(0,4) !== thisYearStr;
+  }).sort((a,b) => normalizeDate(b.DateAssigned).localeCompare(normalizeDate(a.DateAssigned)));
+  let onThisDayHtml = '';
+  if (onThisDay.length > 0) {
+    const rc = r => { const n=Number(r); if(n>=9)return'#4ade80'; if(n>=7)return'#c4b5fd'; if(n>=5)return'#fbbf24'; return'#f87171'; };
+    onThisDayHtml = `
+    <div class="card mt-4 p-4" style="border-color:rgba(255,255,255,0.06)">
+      <div class="flex items-center justify-between mb-3">
+        <span class="text-sm font-semibold text-white">📅 On This Day</span>
+        <span class="text-xs text-gray-500">${onThisDay.length} album${onThisDay.length!==1?'s':''}</span>
+      </div>
+      <div class="flex flex-col gap-2">
+        ${onThisDay.map(a => {
+          const year = normalizeDate(a.DateAssigned).slice(0,4);
+          const title = cleanTitle(a.AlbumTitle||'');
+          return `<div class="flex items-center gap-3 cursor-pointer hover:bg-white/5 rounded-lg px-1 -mx-1 py-0.5 transition-colors" onclick="navigate('artist/'+encodeURIComponent('${(a.Artist||'').replace(/'/g,"\\'").replace(/"/g,'\\"')}'))">
+            <span class="text-xs font-bold w-10 flex-shrink-0" style="color:var(--at)">${year}</span>
+            <div class="flex-1 min-w-0">
+              <div class="text-sm text-white font-medium truncate">${title}</div>
+              <div class="text-xs text-gray-500">${a.Artist||''}</div>
+            </div>
+            ${a.Rating ? `<span class="text-sm font-black flex-shrink-0" style="color:${rc(a.Rating)}">${a.Rating}</span>` : ''}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }
+
+  return streakHtml + goalHtml + recapHtml + onThisDayHtml;
 }
 
 // ─── HOME PAGE ───────────────────────────────────────────────────────────────
@@ -1420,28 +2279,60 @@ async function renderHome() {
       <span class="text-gray-500 text-sm">${dateStr}</span>
       <span class="inline-flex items-center gap-1 bg-purple-500/15 text-purple-300 text-xs font-bold px-2.5 py-1 rounded-full tracking-widest">★ DAILY SPIN</span>
     </div>
-    <div class="relative rounded-2xl overflow-hidden shadow-2xl mb-5" style="aspect-ratio:1">
-      ${artInner}
+    <div id="home-hero" class="relative rounded-2xl overflow-hidden shadow-2xl mb-5" style="aspect-ratio:1">
+      <div id="home-art-inner" class="absolute inset-0">${artInner}</div>
       <div class="absolute inset-0" style="background:linear-gradient(to top, rgba(0,0,0,0.88) 0%, rgba(0,0,0,0.2) 50%, transparent 100%)"></div>
       <div class="absolute bottom-0 left-0 right-0 p-7">
-        <h2 class="text-4xl font-black text-white leading-tight" style="text-shadow:0 2px 16px rgba(0,0,0,0.9)">${album.title}</h2>
-        <p class="text-purple-300 font-semibold text-xl mt-1" style="text-shadow:0 1px 8px rgba(0,0,0,0.9)">${album.artist}</p>
+        <h2 id="home-album-title" class="text-4xl font-black text-white leading-tight" style="text-shadow:0 2px 16px rgba(0,0,0,0.9)">${album.title}</h2>
+        <p id="home-album-artist" class="text-purple-300 font-semibold text-xl mt-1" style="text-shadow:0 1px 8px rgba(0,0,0,0.9)">${album.artist}</p>
       </div>
     </div>
     <div class="flex gap-3">
       <button class="btn-amber flex-1 text-base" style="padding:14px 20px" onclick="navigate('ranking')">⭐ Rate This Album</button>
-      <button class="btn-gray flex items-center justify-center px-5" onclick="shuffleDaily()" title="Pick a different album">
-        ${icons.shuffle}
-      </button>
+      <div class="relative group flex flex-shrink-0">
+        <button class="btn-gray flex items-center justify-center px-5" onclick="shareToCommunity()" title="Share to community">${icons.globe}</button>
+        <span class="pointer-events-none absolute bottom-full left-1/2 mb-2 px-2 py-1 rounded text-xs text-white whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity" style="transform:translateX(-50%);background:#1e1b2e;border:1px solid rgba(255,255,255,0.12)">Share to Community</span>
+      </div>
+      <div class="relative group flex flex-shrink-0">
+        <button class="btn-gray flex items-center justify-center px-5" onclick="smartPickDaily()">🎯</button>
+        <span class="pointer-events-none absolute bottom-full left-1/2 mb-2 px-2 py-1 rounded text-xs text-white whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity" style="transform:translateX(-50%);background:#1e1b2e;border:1px solid rgba(255,255,255,0.12)">Smart Pick</span>
+      </div>
+      <div class="relative group flex flex-shrink-0">
+        <button class="btn-gray flex items-center justify-center px-5" onclick="shuffleDaily()">${icons.shuffle}</button>
+        <span class="pointer-events-none absolute bottom-full left-1/2 mb-2 px-2 py-1 rounded text-xs text-white whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity" style="transform:translateX(-50%);background:#1e1b2e;border:1px solid rgba(255,255,255,0.12)">Random Shuffle</span>
+      </div>
     </div>
     ${await renderHomeGoalAndRecap()}
   </div>`;
 }
 
 async function shuffleDaily() {
-  el('app').innerHTML = `<div class="p-6 max-w-2xl mx-auto">${spinner('Shuffling…')}</div>`;
   const album = await pickDailyAlbum(true);
-  render();
+  if (album) updateHomeHero(album);
+}
+
+async function smartPickDaily() {
+  const list = await getAlbumList();
+  if (!list.length) return;
+  const oldest = [...list].sort((a, b) => a.rowIndex - b.rowIndex).slice(0, 10);
+  const pick = oldest[Math.floor(Math.random() * oldest.length)];
+  setDailyCache(pick);
+  window._dailyAlbum = pick;
+  updateHomeHero(pick);
+}
+
+async function updateHomeHero(album) {
+  const titleEl = el('home-album-title');
+  const artistEl = el('home-album-artist');
+  const artEl = el('home-art-inner');
+  if (titleEl) titleEl.textContent = album.title || album.album_title || '';
+  if (artistEl) artistEl.textContent = album.artist || '';
+  if (artEl) {
+    artEl.innerHTML = `<div class="absolute inset-0 bg-gradient-to-br from-amber-600 to-purple-800 flex items-center justify-center"><svg width="90" height="90" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="1.5" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>`;
+    const url = await fetchAlbumArt(album.title || album.album_title, album.artist);
+    const el2 = el('home-art-inner');
+    if (url && el2) el2.innerHTML = `<img src="${url}" class="absolute inset-0 w-full h-full object-cover" />`;
+  }
 }
 
 function doSetup() {
@@ -1463,39 +2354,107 @@ async function renderLibrary() {
   const genres = [...new Set(albums.map(a=>a.Genre).filter(Boolean))].sort();
   const statuses = [...new Set(albums.map(a=>a.Status).filter(Boolean))].sort();
   const years = [...new Set(albums.map(a=>a.Year).filter(Boolean))].sort((a,b)=>b-a);
+  const decades = [...new Set(albums.map(a=>a.Year).filter(Boolean).map(y=>Math.floor(Number(y)/10)*10))].sort((a,b)=>b-a);
+  const minYear = years.length ? Number(years[years.length-1]) : 1950;
+  const maxYear = years.length ? Number(years[0]) : new Date().getFullYear();
 
   window._libraryAlbums = albums;
   return `<div class="p-6 max-w-4xl mx-auto">
     <div class="flex items-center justify-between mb-4">
       <h1 class="text-2xl font-bold text-white">Library</h1>
-      <button class="btn-gray text-sm flex items-center gap-2" onclick="bulkFetchArt()" title="Auto-fetch album art for all albums using iTunes">🖼 Fetch All Art</button>
+      <div class="flex gap-2">
+        <button class="btn-gray text-sm flex items-center gap-2" onclick="bulkFetchArt(true)" title="Only fetch art for albums that don't have any yet — fast">⚡ Fetch Missing Art</button>
+        <button class="btn-gray text-sm flex items-center gap-2" onclick="bulkFetchArt()" title="Re-check every album and fix any wrong art — slow">🖼 Fetch All Art</button>
+      </div>
     </div>
-    <div class="flex flex-wrap gap-2 mb-4">
-      <input class="input flex-1 min-w-48" id="lib-search" placeholder="Search albums or artists…" oninput="filterLibrary()" />
-      <select class="input w-36" id="lib-genre" onchange="filterLibrary()"><option value="">All Genres</option>${genres.map(g=>`<option>${g}</option>`).join('')}</select>
-      <select class="input w-36" id="lib-status" onchange="filterLibrary()"><option value="">All Statuses</option>${statuses.map(s=>`<option>${s}</option>`).join('')}</select>
-      <select class="input w-28" id="lib-year" onchange="filterLibrary()"><option value="">All Years</option>${years.map(y=>`<option>${y}</option>`).join('')}</select>
-      <select class="input w-32" id="lib-rating" onchange="filterLibrary()"><option value="">Any Rating</option><option value="7">7+</option><option value="8">8+</option><option value="9">9+</option><option value="10">10</option></select>
+    <p class="text-gray-500 text-sm mb-4">Every album here has a rank, #1 to #${albums.length} — its position in this list <em>is</em> its rank, listened-to or not. Use ▲▼ to reorder, or click the rank number to jump straight to a position.</p>
+    <div class="flex gap-2 mb-2">
+      <input class="input flex-1" id="lib-search" placeholder="Search albums or artists…" oninput="filterLibrary()" />
+      <button id="lib-filter-btn" onclick="toggleLibFilters()" class="btn-gray text-sm flex items-center gap-1.5 flex-shrink-0">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="4" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="11" y1="18" x2="13" y2="18"/></svg>
+        Filters
+        <span id="lib-filter-count" class="hidden text-xs font-bold px-1.5 py-0.5 rounded-full" style="background:var(--ac);color:#fff"></span>
+      </button>
+    </div>
+    <div id="lib-filters" class="hidden mb-4 p-4 rounded-xl grid gap-4" style="border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.03)">
+      <div class="grid grid-cols-2 gap-3">
+        <div class="flex flex-col gap-1">
+          <label class="text-xs text-gray-500 font-medium">Genre</label>
+          <select class="input" id="lib-genre" onchange="filterLibrary()"><option value="">All Genres</option>${genres.map(g=>`<option>${g}</option>`).join('')}</select>
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-xs text-gray-500 font-medium">Status</label>
+          <select class="input" id="lib-status" onchange="filterLibrary()"><option value="">All Statuses</option>${statuses.map(s=>`<option>${s}</option>`).join('')}</select>
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-xs text-gray-500 font-medium">Decade</label>
+          <select class="input" id="lib-decade" onchange="filterLibrary()"><option value="">All Decades</option>${decades.map(d=>`<option value="${d}">${d}s</option>`).join('')}</select>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-6">
+        <div class="flex flex-col gap-2">
+          <div class="flex items-center justify-between">
+            <label class="text-xs text-gray-500 font-medium">Release Year</label>
+            <span id="lib-year-label" class="text-sm font-bold" style="color:var(--at)">Any</span>
+          </div>
+          <input type="range" id="lib-year" min="${minYear-1}" max="${maxYear}" step="1" value="${minYear-1}" oninput="filterLibrary()" class="w-full cursor-pointer" style="accent-color:var(--ac)" />
+          <div class="flex justify-between text-xs text-gray-600"><span>${minYear}</span><span>${maxYear}</span></div>
+        </div>
+        <div class="flex flex-col gap-2">
+          <div class="flex items-center justify-between">
+            <label class="text-xs text-gray-500 font-medium">Rating</label>
+            <span id="lib-rating-label" class="text-sm font-bold" style="color:var(--at)">Any</span>
+          </div>
+          <input type="range" id="lib-rating" min="0" max="10" step="0.5" value="0" oninput="filterLibrary()" class="w-full cursor-pointer" style="accent-color:var(--ac)" />
+          <div class="flex justify-between text-xs text-gray-600"><span>Any</span><span>10</span></div>
+        </div>
+      </div>
+      <button onclick="clearLibFilters()" class="text-xs text-gray-600 hover:text-gray-400 transition-colors text-left">✕ Clear all filters</button>
     </div>
     <div id="lib-results" class="grid gap-3"></div>
   </div>`;
 }
 
+function toggleLibFilters() {
+  const panel = el('lib-filters');
+  if (panel) panel.classList.toggle('hidden');
+}
+function clearLibFilters() {
+  const g = el('lib-genre'); if (g) g.value = '';
+  const s = el('lib-status'); if (s) s.value = '';
+  const d = el('lib-decade'); if (d) d.value = '';
+  const yr = el('lib-year'); if (yr) yr.value = yr.min;
+  const rt = el('lib-rating'); if (rt) rt.value = '0';
+  filterLibrary();
+}
 function filterLibrary() {
   const q = (el('lib-search')||{}).value||'';
   const genre = (el('lib-genre')||{}).value||'';
   const status = (el('lib-status')||{}).value||'';
-  const year = (el('lib-year')||{}).value||'';
-  const minRating = parseInt((el('lib-rating')||{}).value||'0')||0;
+  const decade = parseInt((el('lib-decade')||{}).value||'0')||0;
+  const yearSlider = el('lib-year');
+  const exactYear = yearSlider ? parseInt(yearSlider.value) : 0;
+  const yearSentinel = yearSlider ? parseInt(yearSlider.min) : 0;
+  const yearActive = exactYear > yearSentinel;
+  const yearLabel = el('lib-year-label');
+  if (yearLabel) yearLabel.textContent = yearActive ? String(exactYear) : 'Any';
+  const exactRating = parseFloat((el('lib-rating')||{}).value||'0')||0;
+  const ratingLabel = el('lib-rating-label');
+  if (ratingLabel) ratingLabel.textContent = exactRating > 0 ? String(exactRating) : 'Any';
   const albums = window._libraryAlbums||[];
   const filtered = albums.filter(a => {
     if (q && !((a.AlbumTitle||'').toLowerCase().includes(q.toLowerCase()) || (a.Artist||'').toLowerCase().includes(q.toLowerCase()))) return false;
     if (genre && a.Genre!==genre) return false;
     if (status && a.Status!==status) return false;
-    if (year && a.Year!==year) return false;
-    if (minRating && Number(a.Rating)<minRating) return false;
+    if (decade && Math.floor(Number(a.Year)/10)*10 !== decade) return false;
+    if (yearActive && String(a.Year) !== String(exactYear)) return false;
+    if (exactRating > 0 && parseFloat(a.Rating) !== exactRating) return false;
     return true;
   });
+  // Update filter badge count
+  const activeCount = [genre, status, decade ? '1' : '', yearActive ? '1' : '', exactRating ? '1' : ''].filter(Boolean).length;
+  const badge = el('lib-filter-count');
+  if (badge) { badge.textContent = activeCount; badge.classList.toggle('hidden', activeCount === 0); }
   const res = el('lib-results');
   if (!res) return;
   if (!filtered.length) { res.innerHTML=`<p class="text-gray-500 text-center py-12">No albums match your filters.</p>`; return; }
@@ -1519,7 +2478,19 @@ function albumCard(a, showRating=false) {
   const link = a.AlbumLink||a.album_link||'';
   const esc = s => (s||'').replace(/"/g,'&quot;');
   const hasArt = !!_artCache[`${title}|${artist}`];
+  // Rank = this row's position in the full, unfiltered "Ranked albums" sheet (rowIndex 2 → #1).
+  // Always computed off the full list, not the currently-filtered/searched one, so ranks stay
+  // stable (and meaningful as a master ranking) no matter what filter is applied.
+  const libRows = (window._libraryAlbums||[]).map(x=>x.rowIndex);
+  const rank = a.rowIndex ? a.rowIndex - 1 : null;
+  const isFirst = !libRows.length || a.rowIndex === Math.min(...libRows);
+  const isLast = !libRows.length || a.rowIndex === Math.max(...libRows);
   return `<div class="card flex items-center gap-4 cursor-pointer hover:border-gray-700 transition-colors" onclick="showAlbumDetail(${JSON.stringify(JSON.stringify(a)).slice(1,-1)})">
+    ${rank ? `<div class="flex flex-col items-center justify-center gap-0.5 flex-shrink-0 w-6" onclick="event.stopPropagation()">
+      <button onclick="moveLibraryRow(${a.rowIndex},'up')" ${isFirst?'disabled':''} title="Move up" class="text-gray-500 hover:text-purple-400 disabled:opacity-20 disabled:cursor-not-allowed leading-none text-xs">▲</button>
+      <span class="text-gray-500 text-xs font-bold cursor-pointer hover:text-purple-400 hover:underline" onclick="moveLibraryRowTo(${a.rowIndex})" title="Click to jump straight to a rank">#${rank}</span>
+      <button onclick="moveLibraryRow(${a.rowIndex},'down')" ${isLast?'disabled':''} title="Move down" class="text-gray-500 hover:text-purple-400 disabled:opacity-20 disabled:cursor-not-allowed leading-none text-xs">▼</button>
+    </div>` : ''}
     <div class="w-28 h-28 rounded-xl overflow-hidden flex-shrink-0 bg-gradient-to-br from-purple-900 to-violet-950 flex items-center justify-center text-white">
       <div class="art-placeholder w-full h-full flex items-center justify-center" data-title="${esc(title)}" data-artist="${esc(artist)}">${icons.music}</div>
     </div>
@@ -1537,7 +2508,8 @@ function albumCard(a, showRating=false) {
     </div>
     ${showRating && rating ? `<div class="flex items-center gap-1 text-amber-400 font-bold flex-shrink-0"><span>${icons.star}</span>${rating}</div>` : ''}
     ${link ? `<a href="${link}" target="_blank" onclick="event.stopPropagation()" class="text-gray-500 hover:text-purple-400 flex-shrink-0">${icons.link}</a>` : ''}
-    <button onclick="event.stopPropagation();showCardMenu(this,'library','${esc(title)}','${esc(artist)}',${a.rowIndex||0},${relisten})" title="Options" class="flex-shrink-0 text-gray-500 hover:text-gray-300 transition-colors p-1 rounded leading-none" style="font-size:20px;letter-spacing:0">⋮</button>
+    ${a.Review ? `<button onclick="event.stopPropagation();showReview(${a.rowIndex})" title="Read review" class="flex-shrink-0 text-gray-500 hover:text-purple-400 transition-colors p-1 rounded text-base leading-none">💬</button>` : ''}
+    <button onclick="event.stopPropagation();showCardMenu(this,'library','${escJsAttr(title)}','${escJsAttr(artist)}',${a.rowIndex||0},${relisten})" title="Options" class="flex-shrink-0 text-gray-500 hover:text-gray-300 transition-colors p-1 rounded leading-none" style="font-size:20px;letter-spacing:0">⋮</button>
   </div>`;
 }
 
@@ -1606,59 +2578,6 @@ function renderAlbumDetail(a) {
 }
 
 // ─── COMPLETED PAGE ──────────────────────────────────────────────────────────
-async function renderCompleted() {
-  const albums = await getAllAlbums();
-  const completed = albums.filter(a=>a.Status==='Completed');
-  window._completedSort = window._completedSort||'rating_desc';
-  return renderCompletedHtml(completed);
-}
-
-function renderCompletedHtml(completed) {
-  const sort = window._completedSort||'rating_desc';
-  const sorted = [...completed].sort((a,b) => {
-    if (sort==='rating_desc') return Number(b.Rating||0)-Number(a.Rating||0);
-    if (sort==='date_desc') return (b.DateAssigned||'')>(a.DateAssigned||'')?1:-1;
-    if (sort==='artist_asc') return (a.Artist||'').localeCompare(b.Artist||'');
-    if (sort==='year_desc') return Number(b.Year||0)-Number(a.Year||0);
-    return 0;
-  });
-  window._completedAlbums = completed;
-  return `<div class="p-6 max-w-3xl mx-auto">
-    <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
-      <h1 class="text-2xl font-bold text-white">Completed <span class="text-gray-500 text-lg">(${completed.length})</span></h1>
-      <select class="input w-48" onchange="window._completedSort=this.value; el('app').innerHTML='<div class=fade-in>'+renderCompletedHtml(window._completedAlbums)+'</div>'">
-        <option value="rating_desc" ${sort==='rating_desc'?'selected':''}>Highest Rating</option>
-        <option value="date_desc" ${sort==='date_desc'?'selected':''}>Most Recent</option>
-        <option value="artist_asc" ${sort==='artist_asc'?'selected':''}>Artist A–Z</option>
-        <option value="year_desc" ${sort==='year_desc'?'selected':''}>Newest Year</option>
-      </select>
-    </div>
-    ${!sorted.length?`<p class="text-gray-500 text-center py-16">No completed albums yet. Rate today's album to get started!</p>`:''}
-    <div class="flex flex-col gap-3">
-    ${sorted.map(a=>{
-      const moodClass=MOOD_COLORS[a.MoodTag]||'';
-      return `<div class="card flex items-stretch gap-4 cursor-pointer hover:border-gray-700 transition-colors" onclick="showAlbumDetail(${JSON.stringify(JSON.stringify(a)).slice(1,-1)})">
-        <div class="flex-1 min-w-0 flex flex-col gap-1">
-          <div class="flex items-center gap-2 flex-wrap">
-            <span class="text-white font-semibold">${cleanTitle(a.AlbumTitle)}</span>
-            ${needsRelisten(a.AlbumTitle)?relistenTag:''}
-            ${a.MoodTag?`<span class="mood-pill ${moodClass} text-xs">${a.MoodTag}</span>`:''}
-          </div>
-          <div class="text-gray-400 text-sm">${a.Artist}${a.Year?' · '+a.Year:''}${a.Genre?' · '+a.Genre:''}</div>
-          ${a.FavoriteTrack?`<div class="flex items-center gap-1 text-pink-300 text-xs"><span>${icons.heart}</span>${a.FavoriteTrack}</div>`:''}
-          ${a.Review?`<p class="text-gray-400 text-xs italic line-clamp-2">"${a.Review}"</p>`:''}
-          <div class="flex items-center gap-3 mt-1 flex-wrap">
-            ${a.WouldReplay?`<span class="text-xs px-1.5 py-0.5 rounded ${a.WouldReplay==='Yes'?'bg-green-500/15 text-green-300':a.WouldReplay==='No'?'bg-red-500/15 text-red-300':'bg-amber-500/15 text-purple-300'}">${a.WouldReplay}</span>`:''}
-            ${a.DateAssigned?`<span class="text-gray-600 text-xs">${fmt_date(a.DateAssigned)}</span>`:''}
-          </div>
-        </div>
-        ${a.Rating?`<div class="flex flex-col items-center justify-center bg-purple-500/10 rounded-xl px-3 py-2 flex-shrink-0 min-w-[56px]"><span class="text-amber-400 font-bold text-xl">${a.Rating}</span><span class="text-gray-500 text-xs">/10</span></div>`:''}
-      </div>`;
-    }).join('')}
-    </div>
-  </div>`;
-}
-
 // ─── STATS PAGE ──────────────────────────────────────────────────────────────
 async function renderStats() {
   const albums = await getAllAlbums();
@@ -1819,7 +2738,9 @@ async function renderStats() {
             <span class="text-gray-400 text-xs w-20 truncate text-right flex-shrink-0">${g.genre}</span>
             ${hBar(g.avg)}
             <span class="text-gray-400 text-xs w-7 text-right flex-shrink-0">${g.avg.toFixed(1)}</span>
+            <span class="text-gray-600 text-xs w-6 text-right flex-shrink-0">${g.count}</span>
           </div>`).join('')}
+        <p class="text-gray-600 text-xs mt-2">Bar = avg rating · right number = album count</p>
       </div>
       <div class="card">
         <h3 class="text-white font-semibold mb-3">By Decade</h3>
@@ -1901,8 +2822,9 @@ async function renderAdd() {
     <h1 class="text-2xl font-bold text-white mb-6">Add Album</h1>
     <div id="add-success" class="hidden mb-4 p-4 bg-green-500/15 border border-green-500/20 rounded-xl text-green-300 text-sm">Album added to your queue!</div>
     <div class="card flex flex-col gap-4">
-      <div><label class="text-sm text-gray-400 mb-1 block">Album Title *</label><input class="input" id="add-title" placeholder="Dark Side of the Moon"/></div>
-      <div><label class="text-sm text-gray-400 mb-1 block">Artist *</label><input class="input" id="add-artist" placeholder="Pink Floyd"/></div>
+      <div><label class="text-sm text-gray-400 mb-1 block">Album Title *</label><input class="input" id="add-title" placeholder="Dark Side of the Moon" oninput="checkAddAlbumWarning()"/></div>
+      <div><label class="text-sm text-gray-400 mb-1 block">Artist *</label><input class="input" id="add-artist" placeholder="Pink Floyd" oninput="checkAddAlbumWarning()"/></div>
+      <div id="add-warning" class="hidden text-xs text-amber-400"></div>
       <div>
         <label class="text-sm text-gray-400 mb-1 block">Cover Art URL <span class="text-gray-600">(optional)</span></label>
         <input class="input" id="add-art-url" placeholder="https://i.scdn.co/image/... or any image URL"/>
@@ -1913,17 +2835,60 @@ async function renderAdd() {
   </div>`;
 }
 
+// Non-blocking heads-up only — never prevents adding the album. Catches the kind of stray
+// formatting (leading/trailing *, doubled spacing) that has caused real cover-art misses in this
+// library, so it can get fixed at entry time instead of discovered during a bulk art fetch later.
+function _addAlbumWarning(title, artist) {
+  const spots = [];
+  if (/\*/.test(title)) spots.push('the album title');
+  if (/\*/.test(artist)) spots.push('the artist name');
+  const hasStray = spots.length > 0;
+  const hasSpacing = /\s{2,}/.test(title) || /\s{2,}/.test(artist);
+  if (!hasStray && !hasSpacing) return '';
+  const parts = [];
+  if (hasStray) parts.push(`stray characters (like *) in ${spots.join(' and ')}`);
+  if (hasSpacing) parts.push('extra/doubled spacing');
+  return `Heads up: ${parts.join(' and ')} — that can make automatic cover-art lookup miss this album later. Worth double-checking spelling too.`;
+}
+function checkAddAlbumWarning() {
+  const warnEl = el('add-warning');
+  if (!warnEl) return;
+  const title = (el('add-title')||{}).value||'';
+  const artist = (el('add-artist')||{}).value||'';
+  const msg = _addAlbumWarning(title, artist);
+  warnEl.textContent = msg ? '⚠️ ' + msg : '';
+  warnEl.classList.toggle('hidden', !msg);
+}
+
 async function submitAddAlbum() {
   const title = (el('add-title')||{}).value||'';
   const artist = (el('add-artist')||{}).value||'';
   const artUrl = (el('add-art-url')||{}).value||'';
   if (!title||!artist) { alert('Album title and artist are required.'); return; }
-  const btn = el('add-submit'); btn.disabled=true; btn.textContent='Adding…';
+  const btn = el('add-submit'); btn.disabled=true; btn.textContent='Checking…';
+
+  // Check for duplicates in library and queue
+  try {
+    const [libraryAlbums, queueAlbums] = await Promise.all([getAllAlbums(), getAlbumList()]);
+    const normTitle = _artNorm(title), normArtist = _artNorm(artist);
+    const inLibrary = libraryAlbums.find(a => _artNorm(cleanTitle(a.AlbumTitle||'')) === normTitle && _artNorm(a.Artist||'') === normArtist);
+    const inQueue   = queueAlbums.find(a => _artNorm(a.title||'') === normTitle && _artNorm(a.artist||'') === normArtist);
+    if (inLibrary || inQueue) {
+      const where = inLibrary ? `already in your library (rated ${inLibrary.Rating}/10)` : 'already in your queue';
+      if (!confirm(`"${title}" by ${artist} is ${where}.\n\nAdd it to the queue anyway?`)) {
+        btn.disabled=false; btn.textContent='Add to Queue'; return;
+      }
+    }
+  } catch(e) { /* non-fatal — proceed */ }
+
+  btn.textContent='Adding…';
   try {
     await addToAlbumList(title, artist, artUrl);
     if (artUrl) _artCache[`${title}|${artist}`] = artUrl;
+    try { const qd=JSON.parse(localStorage.getItem('vds_queue_dates')||'{}'); qd[`${title}|${artist}`]=today(); localStorage.setItem('vds_queue_dates',JSON.stringify(qd)); } catch(e) {}
     el('add-success').classList.remove('hidden');
     ['add-title','add-artist','add-art-url'].forEach(id=>{ const e=el(id); if(e)e.value=''; });
+    if (el('add-warning')) el('add-warning').classList.add('hidden');
     setTimeout(()=>el('add-success') && el('add-success').classList.add('hidden'),4000);
   } catch(e) { alert('Error: '+e.message); }
   btn.disabled=false; btn.textContent='Add to Queue';
@@ -1933,31 +2898,78 @@ async function submitAddAlbum() {
 async function renderQueue() {
   const list = await getAlbumList();
   const daily = getDailyFromCache();
+
+  // Queue stats
+  const total = list.length;
+  const withArt = list.filter(a => _artCache[`${a.title}|${a.artist}`] || a.artUrl).length;
+  // Estimate pace from last 30 rated library days
+  let paceDays = '—';
+  try {
+    const rated = await getAllAlbums();
+    const dates = [...new Set(rated.filter(a=>a.Rating&&a.DateAssigned).map(a=>normalizeDate(a.DateAssigned)).filter(Boolean))].sort();
+    if (dates.length >= 2) {
+      const oldest = new Date(dates[0]), newest = new Date(dates[dates.length-1]);
+      const daySpan = Math.max(1, (newest - oldest) / 86400000);
+      const pace = dates.length / daySpan; // albums per day
+      paceDays = pace > 0 ? Math.round(total / pace).toLocaleString() : '—';
+    }
+  } catch(e) {}
+
+  const statsHtml = total ? `
+  <div class="grid grid-cols-3 gap-3 mb-6">
+    <div class="card text-center p-3" style="border-color:rgba(255,255,255,0.06)">
+      <div class="text-2xl font-black text-white">${total}</div>
+      <div class="text-xs text-gray-500 mt-0.5">In Queue</div>
+    </div>
+    <div class="card text-center p-3" style="border-color:rgba(255,255,255,0.06)">
+      <div class="text-2xl font-black" style="color:var(--at)">${withArt}</div>
+      <div class="text-xs text-gray-500 mt-0.5">Have Art</div>
+    </div>
+    <div class="card text-center p-3" style="border-color:rgba(255,255,255,0.06)">
+      <div class="text-2xl font-black text-white">${paceDays}d</div>
+      <div class="text-xs text-gray-500 mt-0.5">At Your Pace</div>
+    </div>
+  </div>` : '';
+
   return `<div class="p-6 max-w-2xl mx-auto">
     <div class="flex items-center justify-between mb-2">
       <h1 class="text-2xl font-bold text-white">Queue <span class="text-gray-500 text-lg">(${list.length})</span></h1>
-      <button class="btn-gray flex items-center gap-2 text-sm" onclick="navigate('add')">${icons.plus} Add Album</button>
+      <div class="flex gap-2">
+        <button class="btn-gray text-sm flex items-center gap-2" onclick="bulkFetchQueueArt(true)" title="Only fetch art for albums that don't have any yet — fast">⚡ Fetch Missing Art</button>
+        <button class="btn-gray text-sm flex items-center gap-2" onclick="bulkFetchQueueArt()" title="Re-check every album and fix any wrong art — slow">🖼 Fetch All Art</button>
+        <button class="btn-gray flex items-center gap-2 text-sm" onclick="navigate('add')">${icons.plus} Add Album</button>
+      </div>
     </div>
-    <p class="text-gray-500 text-sm mb-6">Albums waiting to be listened to. A random one is picked each day.</p>
+    <p class="text-gray-500 text-sm mb-4">Albums waiting to be listened to. A random one is picked each day. Use ▲▼ to reorder, or click the number to jump straight to a position.</p>
+    ${statsHtml}
     ${!list.length ? `<p class="text-gray-500 text-center py-16">Your queue is empty! Add some albums to get started.</p>` : ''}
     <div class="flex flex-col gap-3">
-      ${list.map(a => {
+      ${(() => { const rows = list.map(x=>x.rowIndex); const minRow = Math.min(...rows), maxRow = Math.max(...rows); return list.map(a => {
         const isToday = daily && daily.rowIndex === a.rowIndex;
         const esc = s => (s||'').replace(/"/g,'&quot;');
+        const isFirst = a.rowIndex === minRow, isLast = a.rowIndex === maxRow;
+        const daysAgo = a.dateAdded ? Math.floor((new Date(today()) - new Date(a.dateAdded)) / 86400000) : null;
+        const ageBadge = daysAgo !== null ? `<span class="text-xs px-1.5 py-0.5 rounded font-medium flex-shrink-0" style="background:rgba(255,255,255,0.06);color:${daysAgo>90?'#f87171':daysAgo>30?'#fbbf24':'#9ca3af'}" title="Added ${daysAgo}d ago">${daysAgo}d</span>` : '';
         return `<div class="card flex items-center gap-4 ${isToday ? 'border-purple-500/30' : ''}">
+          <div class="flex flex-col items-center justify-center gap-0.5 flex-shrink-0 w-6">
+            <button onclick="moveQueueRow(${a.rowIndex},'up')" ${isFirst?'disabled':''} title="Move up" class="text-gray-500 hover:text-purple-400 disabled:opacity-20 disabled:cursor-not-allowed leading-none text-xs">▲</button>
+            <span class="text-gray-500 text-xs font-bold cursor-pointer hover:text-purple-400 hover:underline" onclick="moveQueueRowTo(${a.rowIndex},${list.length})" title="Click to jump straight to a position">#${a.rowIndex - 1}</span>
+            <button onclick="moveQueueRow(${a.rowIndex},'down')" ${isLast?'disabled':''} title="Move down" class="text-gray-500 hover:text-purple-400 disabled:opacity-20 disabled:cursor-not-allowed leading-none text-xs">▼</button>
+          </div>
           <div class="w-28 h-28 rounded-xl overflow-hidden flex-shrink-0 bg-gradient-to-br from-purple-900 to-violet-950 flex items-center justify-center text-white">
             <div class="art-placeholder w-full h-full flex items-center justify-center" data-title="${esc(a.title)}" data-artist="${esc(a.artist)}">${icons.music}</div>
           </div>
           <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 flex-wrap">
               <span class="text-white font-semibold text-lg truncate">${a.title}</span>
               ${isToday ? `<span class="px-1.5 py-0.5 rounded text-xs bg-purple-500/20 text-purple-300 font-medium">Today</span>` : ''}
+              ${ageBadge}
             </div>
-            <div class="text-gray-400 text-sm mt-1">${a.artist}</div>
+            <span class="text-gray-400 text-sm mt-1 hover:underline cursor-pointer" onclick="event.stopPropagation();navigate('artist/'+encodeURIComponent('${escJsAttr(a.artist)}'))">${a.artist}</span>
           </div>
-          <button onclick="event.stopPropagation();showCardMenu(this,'queue','${esc(a.title)}','${esc(a.artist)}',${a.rowIndex})" title="Options" class="flex-shrink-0 text-gray-500 hover:text-gray-300 transition-colors p-1 rounded leading-none" style="font-size:20px;letter-spacing:0">⋮</button>
+          <button onclick="event.stopPropagation();showCardMenu(this,'queue','${escJsAttr(a.title)}','${escJsAttr(a.artist)}',${a.rowIndex})" title="Options" class="flex-shrink-0 text-gray-500 hover:text-gray-300 transition-colors p-1 rounded leading-none" style="font-size:20px;letter-spacing:0">⋮</button>
         </div>`;
-      }).join('')}
+      }).join(''); })()}
     </div>
   </div>`;
 }
@@ -1975,7 +2987,7 @@ async function renderRanking() {
     <div id="rank-success" class="hidden flex-col items-center gap-6 text-center py-12">
       <div class="w-16 h-16 rounded-full bg-green-500/15 flex items-center justify-center text-green-400">${icons.check}</div>
       <h2 class="text-xl font-bold text-white">Album Rated!</h2>
-      <div class="flex gap-3"><button class="btn-amber" onclick="navigate('home')">Home</button><button class="btn-gray" onclick="navigate('completed')">See Completed</button></div>
+      <div class="flex gap-3"><button class="btn-amber" onclick="navigate('home')">Home</button><button class="btn-gray" onclick="navigate('library')">See Library</button></div>
     </div>
     <div id="rank-form" class="card flex flex-col gap-6">
       <div>
@@ -2083,18 +3095,30 @@ function renderCalendarHtml() {
   const daysInMonth = new Date(year,month+1,0).getDate();
   const selected = window._calSelected;
 
+  // Rating → cell tint + badge color
+  const ratingStyle = r => {
+    const n = Number(r);
+    if (n >= 9) return { bg:'rgba(34,197,94,0.12)',  badge:'#4ade80' };
+    if (n >= 7) return { bg:'rgba(139,92,246,0.18)', badge:'#c4b5fd' };
+    if (n >= 5) return { bg:'rgba(251,191,36,0.12)', badge:'#fbbf24' };
+    if (n >= 1) return { bg:'rgba(239,68,68,0.12)',  badge:'#f87171' };
+    return       { bg:'rgba(139,92,246,0.12)',        badge:'#a78bfa' };
+  };
+
   let cells = '';
   for (let i=0;i<firstDay;i++) cells += `<div class="h-20 rounded-xl bg-purple-950/20"></div>`;
   for (let d=1;d<=daysInMonth;d++) {
     const ds = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
     const album = dateMap[ds];
     const isToday = ds===todayStr;
-    cells += `<div class="h-20 rounded-xl p-2 border transition-all cursor-pointer ${album?'bg-purple-950/50 border-purple-800/30 hover:border-purple-500/40':'bg-purple-950/20 border-purple-900/20'}" onclick="${album?`selectCalDay('${ds}')`:''}">
+    const rs = album ? ratingStyle(album.Rating) : null;
+    const cellBg = album ? rs.bg : 'rgba(88,28,135,0.08)';
+    cells += `<div class="h-20 rounded-xl p-2 border transition-all ${album?'cursor-pointer hover:brightness-125':''}" style="background:${cellBg};border-color:${album?'rgba(139,92,246,0.25)':'rgba(88,28,135,0.15)'}" onclick="${album?`selectCalDay('${ds}')`:''}">
       <div class="flex items-center justify-between mb-1">
-        <span class="${isToday?'w-6 h-6 rounded-full bg-purple-600 text-white text-xs font-bold flex items-center justify-center':'text-gray-500 text-xs'}">${d}</span>
-        ${album?`<span class="text-amber-400">${icons.disc}</span>`:''}
+        <span class="${isToday?'w-5 h-5 rounded-full bg-purple-600 text-white text-xs font-bold flex items-center justify-center':'text-gray-500 text-xs'}">${d}</span>
+        ${album && album.Rating ? `<span class="text-xs font-bold leading-none" style="color:${rs.badge}">${album.Rating}</span>` : album ? `<span style="color:${rs.badge};font-size:10px">·</span>` : ''}
       </div>
-      ${album?`<div class="text-white text-xs font-medium leading-tight line-clamp-2">${album.AlbumTitle}</div>`:''}
+      ${album?`<div class="text-white text-xs font-medium leading-tight line-clamp-2" style="opacity:0.9">${cleanTitle(album.AlbumTitle)}</div>`:''}
     </div>`;
   }
 
@@ -2223,7 +3247,19 @@ async function renderDiscover() {
     ? (moodAlbums[selected]||[]).sort((a,b)=>Number(b.Rating)-Number(a.Rating)).slice(0,5)
     : [];
   const randQueue = queue.length ? queue[Math.floor(Math.random()*queue.length)] : null;
-  return `<div class="p-6 max-w-2xl mx-auto">
+  const oldest10 = [...queue].sort((a,b) => a.rowIndex - b.rowIndex).slice(0, 10);
+  const smartQueue = oldest10.length ? oldest10[Math.floor(Math.random()*oldest10.length)] : null;
+  // Due for a Relisten: albums flagged with * in title (same as Relisten page)
+  const relistenPool = albums
+    .filter(a => (a.AlbumTitle||'').includes('*'))
+    .sort((a,b) => Number(b.Rating||0)-Number(a.Rating||0))
+    .slice(0, 20);
+  const relistenPick = relistenPool.length ? relistenPool[Math.floor(Math.random()*relistenPool.length)] : null;
+  // Cache for per-card reshuffling
+  window._discoverQueue = queue;
+  window._discoverOldest10 = oldest10;
+  window._discoverRelistenPool = relistenPool;
+  return `<div class="p-6 max-w-5xl mx-auto">
     <h1 class="text-2xl font-bold text-white mb-2">Discover</h1>
     <p class="text-gray-500 text-sm mb-6">Find your next listen based on your mood.</p>
 
@@ -2248,19 +3284,104 @@ async function renderDiscover() {
         </div>`).join('')}
     </div>` : selected ? `<p class="text-gray-500 text-sm mb-6">No albums tagged with this mood yet. Tag some when rating!</p>` : ''}
 
-    <div class="card" style="border-style:dashed">
-      <h2 class="text-white font-semibold mb-1">🎲 Random from Queue</h2>
-      <p class="text-gray-500 text-sm mb-4">Not sure what to pick? Let fate decide.</p>
-      ${randQueue ? `
-        <div class="flex items-center gap-4 mb-4">
-          <div class="w-14 h-14 rounded-xl overflow-hidden flex-shrink-0 bg-gradient-to-br from-purple-900 to-violet-950 flex items-center justify-center">
-            <div class="art-placeholder w-full h-full flex items-center justify-center" data-title="${(randQueue.title||'').replace(/"/g,'&quot;')}" data-artist="${(randQueue.artist||'').replace(/"/g,'&quot;')}">${icons.music}</div>
+    <div class="grid gap-4" style="grid-template-columns:2fr 1fr">
+
+      <!-- Random Shuffle — main hero card, spans 2 rows -->
+      <div class="card p-0 overflow-hidden flex flex-col" style="border-style:dashed;grid-row:1/3">
+        <div class="relative rounded-t-xl overflow-hidden flex-shrink-0" style="aspect-ratio:1">
+          <div id="disc-rand-art" class="art-placeholder w-full h-full bg-gradient-to-br from-purple-900 to-violet-950 flex items-center justify-center"
+            data-title="${(randQueue ? randQueue.title : '').replace(/"/g,'&quot;')}"
+            data-artist="${(randQueue ? randQueue.artist : '').replace(/"/g,'&quot;')}">
+            ${icons.music}
           </div>
-          <div><div class="text-white font-semibold">${randQueue.title}</div><div class="text-gray-400 text-sm">${randQueue.artist}</div></div>
-        </div>` : '<p class="text-gray-500 text-sm">Your queue is empty.</p>'}
-      <button onclick="window._discoverMood=null;render()" class="btn-gray text-sm">${icons.shuffle} Shuffle again</button>
+          <div class="absolute inset-0" style="background:linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 50%)"></div>
+          <div class="absolute bottom-0 left-0 right-0 p-5">
+            <div class="text-xs font-bold uppercase tracking-widest text-purple-300 mb-1">🎲 Random Shuffle</div>
+            <div id="disc-rand-title" class="text-white font-bold text-xl leading-tight">${randQueue ? randQueue.title : '<span class="text-gray-400 text-sm">Queue is empty</span>'}</div>
+            <div id="disc-rand-sub" class="text-gray-300 text-sm mt-0.5">${randQueue ? randQueue.artist : ''}</div>
+          </div>
+        </div>
+        <div class="p-4 mt-auto">
+          <button onclick="discShuffle('rand')" class="btn-gray w-full">${icons.shuffle} Shuffle again</button>
+        </div>
+      </div>
+
+      <!-- Smart Pick — smaller, top right -->
+      <div class="card p-0 overflow-hidden flex flex-col" style="border-style:dashed">
+        <div class="relative rounded-t-xl overflow-hidden flex-shrink-0" style="aspect-ratio:1">
+          <div id="disc-smart-art" class="art-placeholder w-full h-full bg-gradient-to-br from-purple-900 to-violet-950 flex items-center justify-center"
+            data-title="${(smartQueue ? smartQueue.title : '').replace(/"/g,'&quot;')}"
+            data-artist="${(smartQueue ? smartQueue.artist : '').replace(/"/g,'&quot;')}">
+            ${icons.music}
+          </div>
+          <div class="absolute inset-0" style="background:linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 55%)"></div>
+          <div class="absolute bottom-0 left-0 right-0 p-3">
+            <div class="text-xs font-bold uppercase tracking-widest text-purple-300 mb-0.5">🎯 Smart Pick</div>
+            <div id="disc-smart-title" class="text-white font-bold leading-tight truncate">${smartQueue ? smartQueue.title : '<span class="text-gray-400 text-xs">Queue is empty</span>'}</div>
+            <div id="disc-smart-sub" class="text-gray-300 text-xs truncate">${smartQueue ? smartQueue.artist : ''}</div>
+          </div>
+        </div>
+        <div class="p-3 mt-auto">
+          <button onclick="discShuffle('smart')" class="btn-gray text-sm w-full">🎯 Pick another</button>
+        </div>
+      </div>
+
+      <!-- Due for a Relisten — smaller, bottom right -->
+      <div class="card p-0 overflow-hidden flex flex-col" style="border-style:dashed">
+        <div class="relative rounded-t-xl overflow-hidden flex-shrink-0" style="aspect-ratio:1">
+          <div id="disc-relisten-art" class="art-placeholder w-full h-full bg-gradient-to-br from-purple-900 to-violet-950 flex items-center justify-center"
+            data-title="${(relistenPick ? (relistenPick.AlbumTitle||'').replace(/\*/g,'').trim() : '').replace(/"/g,'&quot;')}"
+            data-artist="${(relistenPick ? relistenPick.Artist : '').replace(/"/g,'&quot;')}">
+            ${icons.music}
+          </div>
+          <div class="absolute inset-0" style="background:linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 55%)"></div>
+          <div class="absolute bottom-0 left-0 right-0 p-3">
+            <div class="text-xs font-bold uppercase tracking-widest text-purple-300 mb-0.5">🔁 Due for a Relisten</div>
+            <div id="disc-relisten-title" class="text-white font-bold leading-tight truncate">${relistenPick ? (relistenPick.AlbumTitle||'').replace(/\*/g,'').trim() : '<span class="text-gray-400 text-xs">No albums flagged yet</span>'}</div>
+            <div id="disc-relisten-sub" class="text-gray-300 text-xs truncate">${relistenPick ? (relistenPick.Artist + (relistenPick.Rating ? ' · ' + relistenPick.Rating + '/10' : '')) : ''}</div>
+          </div>
+        </div>
+        <div class="p-3 mt-auto">
+          <button onclick="discShuffle('relisten')" class="btn-gray text-sm w-full">🔁 Pick another</button>
+        </div>
+      </div>
+
     </div>
   </div>`;
+}
+
+function discShuffle(type) {
+  const queue = window._discoverQueue || [];
+  const oldest10 = window._discoverOldest10 || [];
+  const relistenPool = window._discoverRelistenPool || [];
+
+  let pick, artId, titleId, subId;
+  if (type === 'smart') {
+    pick = oldest10.length ? oldest10[Math.floor(Math.random()*oldest10.length)] : null;
+    artId = 'disc-smart-art'; titleId = 'disc-smart-title'; subId = 'disc-smart-sub';
+  } else if (type === 'rand') {
+    pick = queue.length ? queue[Math.floor(Math.random()*queue.length)] : null;
+    artId = 'disc-rand-art'; titleId = 'disc-rand-title'; subId = 'disc-rand-sub';
+  } else {
+    const p = relistenPool.length ? relistenPool[Math.floor(Math.random()*relistenPool.length)] : null;
+    pick = p ? { title: (p.AlbumTitle||'').replace(/\*/g,'').trim(), artist: p.Artist, sub: p.Artist + (p.Rating ? ' · ' + p.Rating + '/10' : '') } : null;
+    artId = 'disc-relisten-art'; titleId = 'disc-relisten-title'; subId = 'disc-relisten-sub';
+  }
+
+  const titleEl = el(titleId), subEl = el(subId), artEl = el(artId);
+  const title = pick ? (pick.title || '') : '';
+  const artist = pick ? (pick.artist || '') : '';
+  const sub = pick ? (pick.sub || artist) : '';
+
+  if (titleEl) titleEl.textContent = title || (type === 'relisten' ? 'Mark albums for relisten when rating' : 'Queue is empty');
+  if (subEl) subEl.textContent = sub;
+  if (artEl && title) {
+    artEl.setAttribute('data-title', title);
+    artEl.setAttribute('data-artist', artist);
+    artEl.removeAttribute('data-loaded');
+    artEl.innerHTML = `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center">${icons.music}</div>`;
+    loadLazyArt();
+  }
 }
 
 // ─── ARTIST PAGE ──────────────────────────────────────────────────────────────
@@ -2331,6 +3452,301 @@ async function renderTop10() {
   </div>`;
 }
 
+// ─── ALBUM OF THE YEAR PAGE ──────────────────────────────────────────────────
+async function renderAoty() {
+  const albums = await getAllAlbums();
+  window._aotyAlbums = albums; // cache for autoSetAotyFromTens
+  const aoty = (() => { try { return JSON.parse(localStorage.getItem('vds_aoty')||'{}'); } catch(e) { return {}; } })();
+
+  // Group rated albums by release Year (not listen date — most albums won't have DateAssigned)
+  const yearMap = {};
+  albums.filter(a => a.Rating && a.Year).forEach(a => {
+    const yr = String(a.Year).trim().slice(0, 4);
+    if (!yr || !/^\d{4}$/.test(yr)) return;
+    if (!yearMap[yr]) yearMap[yr] = [];
+    yearMap[yr].push(a);
+  });
+  // Sort each year's albums by rating desc
+  Object.values(yearMap).forEach(list => list.sort((a,b) => Number(b.Rating)-Number(a.Rating)));
+
+  // Union: years with rated albums + years with pinned AOTYs + extra user-added years
+  const pinnedYears = Object.keys(aoty).filter(k => k !== '_extra' && /^\d{4}$/.test(k));
+  const extraYears = (() => { try { return JSON.parse(localStorage.getItem('vds_aoty_extra')||'[]'); } catch(e) { return []; } })();
+  const currentYear = String(new Date().getFullYear());
+  // Don't auto-add current year if it has no albums
+  const allYears = new Set([...Object.keys(yearMap), ...pinnedYears, ...extraYears]);
+  const years = [...allYears].sort((a,b) => b-a);
+
+  const esc = s => (s||'').replace(/"/g,'&quot;');
+  const ratingColor = r => { const n=Number(r); if(n>=9)return'#4ade80'; if(n>=7)return'#c4b5fd'; if(n>=5)return'#fbbf24'; return'#f87171'; };
+
+  return `<div class="p-6 max-w-2xl mx-auto">
+    <h1 class="text-2xl font-bold text-white mb-1">👑 Album of the Year</h1>
+    <p class="text-gray-500 text-sm mb-4">Your personal AOTY for each year. Set from any album's ⋮ menu, or quick-pick below.</p>
+    <div class="flex gap-2 mb-6 flex-wrap">
+      <input id="aoty-year-input" class="input w-28" placeholder="Year" maxlength="4" type="number" min="1900" max="${currentYear}" />
+      <button onclick="addAotyYear()" class="btn-gray text-sm">＋ Add year</button>
+      <button onclick="autoSetAotyFromTens()" class="btn-gray text-sm ml-auto" style="color:#fbbf24" title="Pin all your 10/10 albums as AOTY for their respective years">👑 Auto-fill 10/10s</button>
+    </div>
+
+    <div class="flex flex-col gap-6">
+      ${years.map(yr => {
+        const pinned = aoty[yr];
+        const candidates = yearMap[yr] || [];
+        const art = pinned ? (_artCache[`${pinned.title}|${pinned.artist}`] || '') : '';
+        const artHtml = art
+          ? `<img src="${esc(art)}" class="w-full h-full object-cover" />`
+          : `<div class="w-full h-full flex items-center justify-center">${icons.music}</div>`;
+
+        return `<div id="aoty-yr-${yr}">
+          <div class="flex items-center gap-3 mb-3">
+            <span class="text-3xl font-black" style="color:var(--at)">${yr}</span>
+            <button class="aoty-menu-btn ml-auto w-7 h-7 flex items-center justify-center rounded text-gray-500 hover:text-gray-300 hover:bg-white/5 transition-colors text-base leading-none" onclick="showAotyMenu(this,'${yr}','${esc(pinned ? pinned.title : '')}','${esc(pinned ? pinned.artist : '')}')">⋯</button>
+          </div>
+          <div class="aoty-content">
+          ${pinned ? `
+          <div class="card flex items-center gap-5" style="border-color:rgba(251,191,36,0.2);background:rgba(251,191,36,0.04)">
+            <div class="w-20 h-20 rounded-xl overflow-hidden flex-shrink-0 bg-gradient-to-br from-amber-900/40 to-purple-900/40 flex items-center justify-center">
+              ${artHtml}
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="text-xs font-bold uppercase tracking-widest text-amber-400 mb-1">👑 ${yr} AOTY</div>
+              <div class="text-white font-bold text-lg leading-tight truncate">${esc(pinned.title)}</div>
+              <div class="text-gray-400 text-sm mt-0.5">${esc(pinned.artist)}</div>
+            </div>
+            ${pinned.rating ? `<div class="font-black text-2xl flex-shrink-0" style="color:${ratingColor(pinned.rating)}">${pinned.rating}</div>` : ''}
+          </div>` : `
+          <div class="rounded-xl p-4 flex flex-col gap-3" style="border:1px dashed rgba(255,255,255,0.1)">
+            <p class="text-gray-500 text-sm">Pick your ${yr} AOTY:</p>
+            ${candidates.length ? `
+            <div class="flex flex-col gap-1.5">
+              ${candidates.slice(0,5).map(a => {
+                const t = cleanTitle(a.AlbumTitle||'');
+                return `<button onclick="quickSetAoty('${yr}','${esc(t)}','${esc(a.Artist||'')}','${a.Rating||''}')" class="flex items-center gap-3 text-left rounded-lg px-3 py-2 transition-colors hover:bg-white/5" style="border:1px solid rgba(255,255,255,0.06)">
+                  <div class="w-9 h-9 rounded-lg overflow-hidden flex-shrink-0 bg-gradient-to-br from-purple-900 to-violet-950 flex items-center justify-center">
+                    <div class="art-placeholder w-full h-full flex items-center justify-center" data-title="${esc(t)}" data-artist="${esc(a.Artist||'')}">${icons.music}</div>
+                  </div>
+                  <div class="flex-1 min-w-0">
+                    <div class="text-white text-sm font-medium truncate">${t}</div>
+                    <div class="text-gray-500 text-xs">${a.Artist||''}</div>
+                  </div>
+                  <span class="text-sm font-bold flex-shrink-0" style="color:${ratingColor(a.Rating)}">${a.Rating}</span>
+                </button>`;
+              }).join('')}
+            </div>` : `<p class="text-gray-400 text-xs">No rated albums from ${yr} yet.</p>`}
+          </div>`}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+function quickSetAoty(yr, title, artist, rating) {
+  try {
+    const aoty = JSON.parse(localStorage.getItem('vds_aoty')||'{}');
+    aoty[yr] = { title, artist, rating };
+    localStorage.setItem('vds_aoty', JSON.stringify(aoty));
+    _updateAotySectionDOM(yr, title, artist, rating); // in-place, no spinner
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+function _updateAotySectionDOM(yr, title, artist, rating) {
+  const section = el('aoty-yr-' + yr);
+  if (!section) { render(); return; } // fallback if section not in DOM
+  const rColor = r => { const n=Number(r); if(n>=9)return'#4ade80'; if(n>=7)return'#c4b5fd'; if(n>=5)return'#fbbf24'; return'#f87171'; };
+  const esc2 = s => (s||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  // Update ⋯ menu button so it passes the new title/artist
+  const menuBtn = section.querySelector('.aoty-menu-btn');
+  if (menuBtn) menuBtn.setAttribute('onclick', `showAotyMenu(this,'${yr}','${esc2(title)}','${esc2(artist)}')`);
+  // Swap content to the big pinned card
+  const content = section.querySelector('.aoty-content');
+  if (!content) return;
+  content.innerHTML = `
+    <div class="card flex items-center gap-5" style="border-color:rgba(251,191,36,0.2);background:rgba(251,191,36,0.04)">
+      <div class="w-20 h-20 rounded-xl overflow-hidden flex-shrink-0 bg-gradient-to-br from-amber-900/40 to-purple-900/40 flex items-center justify-center">
+        <div class="art-placeholder w-full h-full flex items-center justify-center" data-title="${esc2(title)}" data-artist="${esc2(artist)}">${icons.music}</div>
+      </div>
+      <div class="flex-1 min-w-0">
+        <div class="text-xs font-bold uppercase tracking-widest text-amber-400 mb-1">👑 ${yr} AOTY</div>
+        <div class="text-white font-bold text-lg leading-tight truncate">${esc2(title)}</div>
+        <div class="text-gray-400 text-sm mt-0.5">${esc2(artist)}</div>
+      </div>
+      ${rating ? `<div class="font-black text-2xl flex-shrink-0" style="color:${rColor(rating)}">${rating}</div>` : ''}
+    </div>`;
+  loadLazyArt();
+}
+
+function clearAoty(yr) {
+  if (!confirm(`Clear your ${yr} Album of the Year?`)) return;
+  try {
+    const aoty = JSON.parse(localStorage.getItem('vds_aoty')||'{}');
+    delete aoty[yr];
+    localStorage.setItem('vds_aoty', JSON.stringify(aoty));
+    // Also remove from extra years if it had no rated albums
+    const extra = JSON.parse(localStorage.getItem('vds_aoty_extra')||'[]').filter(y => y !== yr);
+    localStorage.setItem('vds_aoty_extra', JSON.stringify(extra));
+    render();
+  } catch(e) {}
+}
+
+let _aotyMenuCtx = null;
+function showAotyMenu(btn, yr, title, artist) {
+  _aotyMenuCtx = { yr, title, artist };
+  const menu = document.getElementById('card-menu');
+  const btnClass = 'w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-white/5 transition-colors cursor-pointer';
+  const sep = `<div style="border-top:1px solid rgba(255,255,255,0.08);margin:2px 0"></div>`;
+  let html = '';
+  html += `<button class="${btnClass}" style="color:#e5e7eb" onclick="event.stopPropagation();hideCardMenu();aotyMenuAddManual()">➕ Add album manually</button>`;
+  html += sep;
+  if (title) {
+    html += `<button class="${btnClass}" style="color:#c4b5fd" onclick="event.stopPropagation();hideCardMenu();aotyMenuChange()">✏️ Change album</button>`;
+    html += sep;
+  }
+  html += `<button class="${btnClass}" style="color:#f87171" onclick="event.stopPropagation();hideCardMenu();aotyMenuRemoveYear()">✕ Remove year</button>`;
+  menu.innerHTML = html;
+  const rect = btn.getBoundingClientRect();
+  menu.style.top = (rect.bottom + 6) + 'px';
+  menu.style.left = Math.min(rect.right - 164, window.innerWidth - 172) + 'px';
+  menu.classList.remove('hidden');
+  event.stopPropagation();
+}
+function aotyMenuAddManual() {
+  if (!_aotyMenuCtx) return;
+  const { yr } = _aotyMenuCtx;
+  const title = (prompt(`Album title for ${yr} AOTY:`) || '').trim();
+  if (!title) return;
+  const artist = (prompt(`Artist:`) || '').trim();
+  if (!artist) return;
+  const rating = (prompt(`Rating out of 10 (leave blank to skip):`) || '').trim();
+  try {
+    const aoty = JSON.parse(localStorage.getItem('vds_aoty')||'{}');
+    aoty[yr] = { title, artist, rating: rating || '' };
+    localStorage.setItem('vds_aoty', JSON.stringify(aoty));
+    // Ensure year stays in the timeline
+    const extra = JSON.parse(localStorage.getItem('vds_aoty_extra')||'[]');
+    if (!extra.includes(yr)) { extra.push(yr); localStorage.setItem('vds_aoty_extra', JSON.stringify(extra)); }
+    render();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+function aotyMenuChange() {
+  if (!_aotyMenuCtx) return;
+  const { yr } = _aotyMenuCtx;
+  try {
+    const aoty = JSON.parse(localStorage.getItem('vds_aoty')||'{}');
+    delete aoty[yr];
+    localStorage.setItem('vds_aoty', JSON.stringify(aoty));
+    _restoreAotyCandidatesDOM(yr); // in-place, no spinner
+  } catch(e) {}
+}
+
+function _restoreAotyCandidatesDOM(yr) {
+  const section = el('aoty-yr-' + yr);
+  if (!section) { render(); return; }
+  const albums = window._aotyAlbums || window._libraryAlbums || [];
+  const candidates = albums
+    .filter(a => a.Rating && String(a.Year||'').trim().slice(0,4) === yr)
+    .sort((a,b) => Number(b.Rating)-Number(a.Rating))
+    .slice(0, 5);
+  const esc2 = s => (s||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  const rColor = r => { const n=Number(r); if(n>=9)return'#4ade80'; if(n>=7)return'#c4b5fd'; if(n>=5)return'#fbbf24'; return'#f87171'; };
+  // Reset ⋯ button so it no longer passes old title/artist
+  const menuBtn = section.querySelector('.aoty-menu-btn');
+  if (menuBtn) menuBtn.setAttribute('onclick', `showAotyMenu(this,'${yr}','','')`);
+  const content = section.querySelector('.aoty-content');
+  if (!content) return;
+  content.innerHTML = `
+    <div class="rounded-xl p-4 flex flex-col gap-3" style="border:1px dashed rgba(255,255,255,0.1)">
+      <p class="text-gray-500 text-sm">Pick your ${yr} AOTY:</p>
+      ${candidates.length ? `<div class="flex flex-col gap-1.5">
+        ${candidates.map(a => {
+          const t = cleanTitle(a.AlbumTitle||'');
+          return `<button onclick="quickSetAoty('${yr}','${esc2(t)}','${esc2(a.Artist||'')}','${a.Rating||''}')" class="flex items-center gap-3 text-left rounded-lg px-3 py-2 transition-colors hover:bg-white/5" style="border:1px solid rgba(255,255,255,0.06)">
+            <div class="w-9 h-9 rounded-lg overflow-hidden flex-shrink-0 bg-gradient-to-br from-purple-900 to-violet-950 flex items-center justify-center">
+              <div class="art-placeholder w-full h-full flex items-center justify-center" data-title="${esc2(t)}" data-artist="${esc2(a.Artist||'')}">${icons.music}</div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="text-white text-sm font-medium truncate">${t}</div>
+              <div class="text-gray-500 text-xs">${a.Artist||''}</div>
+            </div>
+            <span class="text-sm font-bold flex-shrink-0" style="color:${rColor(a.Rating)}">${a.Rating}</span>
+          </button>`;
+        }).join('')}
+      </div>` : `<p class="text-gray-400 text-xs">No rated albums from ${yr} yet.</p>`}
+    </div>`;
+  loadLazyArt();
+}
+function aotyMenuRemoveYear() {
+  if (!_aotyMenuCtx) return;
+  const { yr } = _aotyMenuCtx;
+  if (!confirm(`Remove ${yr} from your AOTY timeline?`)) return;
+  try {
+    const aoty = JSON.parse(localStorage.getItem('vds_aoty')||'{}');
+    delete aoty[yr];
+    localStorage.setItem('vds_aoty', JSON.stringify(aoty));
+    const extra = JSON.parse(localStorage.getItem('vds_aoty_extra')||'[]').filter(y => y !== yr);
+    localStorage.setItem('vds_aoty_extra', JSON.stringify(extra));
+    render();
+  } catch(e) {}
+}
+
+function addAotyYear() {
+  const input = el('aoty-year-input');
+  const yr = (input ? input.value : '').trim();
+  if (!yr || !/^\d{4}$/.test(yr) || Number(yr) < 1900 || Number(yr) > new Date().getFullYear()) {
+    alert('Enter a valid year (1900–' + new Date().getFullYear() + ')'); return;
+  }
+  try {
+    const extra = JSON.parse(localStorage.getItem('vds_aoty_extra')||'[]');
+    if (!extra.includes(yr)) { extra.push(yr); localStorage.setItem('vds_aoty_extra', JSON.stringify(extra)); }
+    render();
+  } catch(e) {}
+}
+
+async function autoSetAotyFromTens() {
+  // Use the cached result from renderAoty() — avoids a second API call that can fail on token refresh
+  let albums = (window._aotyAlbums && window._aotyAlbums.length)
+    ? window._aotyAlbums
+    : (window._libraryAlbums && window._libraryAlbums.length)
+      ? window._libraryAlbums
+      : await getAllAlbums();
+  // Also try a fresh fetch if cache is empty
+  if (!albums.length) {
+    try { albums = await getAllAlbums(); } catch(e) {}
+  }
+  const tens = albums.filter(a => parseFloat(a.Rating) === 10);
+  if (!tens.length) { alert('No 10/10 albums found in your library.'); return; }
+
+  // Group by year — prefer DateAssigned, fall back to release Year
+  const aoty = (() => { try { return JSON.parse(localStorage.getItem('vds_aoty')||'{}'); } catch(e) { return {}; } })();
+  const extra = (() => { try { return JSON.parse(localStorage.getItem('vds_aoty_extra')||'[]'); } catch(e) { return []; } })();
+  const byYear = {};
+  tens.forEach(a => {
+    let yr = null;
+    if (a.DateAssigned) yr = normalizeDate(a.DateAssigned).slice(0, 4);
+    if ((!yr || yr === 'NaN') && a.Year) yr = String(a.Year).trim().slice(0, 4);
+    if (!yr || yr === 'NaN' || yr.length !== 4) return;
+    // If this year already has a pinned AOTY that matches a 10/10, keep it; otherwise first wins
+    if (!byYear[yr]) byYear[yr] = a;
+    else if (aoty[yr] && aoty[yr].title === cleanTitle(a.AlbumTitle||'')) byYear[yr] = a;
+  });
+
+  const years = Object.keys(byYear);
+  if (!years.length) { alert('No 10/10 albums with valid dates found.'); return; }
+
+  years.forEach(yr => {
+    const a = byYear[yr];
+    aoty[yr] = { title: cleanTitle(a.AlbumTitle||''), artist: a.Artist||'', rating: '10' };
+    if (!extra.includes(yr)) extra.push(yr);
+  });
+
+  localStorage.setItem('vds_aoty', JSON.stringify(aoty));
+  localStorage.setItem('vds_aoty_extra', JSON.stringify(extra));
+  const sorted = years.sort((a, b) => b - a).join(', ');
+  alert(`👑 Pinned ${years.length} album${years.length !== 1 ? 's' : ''} as AOTY:\n${sorted}`);
+  render();
+}
+
 // ─── RELISTEN PAGE ───────────────────────────────────────────────────────────
 async function renderRelisten() {
   const albums = await getAllAlbums();
@@ -2358,6 +3774,172 @@ async function renderRelisten() {
           ${a.Rating ? `<div class="flex items-center gap-1 text-amber-400 font-bold text-sm flex-shrink-0"><span>${icons.star}</span>${a.Rating}</div>` : ''}
         </div>`).join('')}
     </div>
+  </div>`;
+}
+
+// ─── COMMUNITY / FIREBASE ────────────────────────────────────────────────────
+let _firebaseDB = null;
+
+const _DEFAULT_FIREBASE_CFG = {
+  apiKey: "AIzaSyAakewHFBcZ7v4q_4qM58w9bExABISSjcc",
+  authDomain: "daily-vinyl-spin.firebaseapp.com",
+  databaseURL: "https://daily-vinyl-spin-default-rtdb.firebaseio.com",
+  projectId: "daily-vinyl-spin",
+  storageBucket: "daily-vinyl-spin.firebasestorage.app",
+  messagingSenderId: "807523384997",
+  appId: "1:807523384997:web:cc1ca2e6e9d20d8ef3d74c"
+};
+
+async function initFirebase() {
+  if (_firebaseDB) return _firebaseDB;
+  const stored = (() => { try { return JSON.parse(localStorage.getItem('vds_firebase_cfg')||'null'); } catch(e) { return null; } })();
+  const cfg = (stored && stored.apiKey && stored.databaseURL) ? stored : _DEFAULT_FIREBASE_CFG;
+  // Lazy-load Firebase compat SDK if needed
+  if (!window.firebase) {
+    const load = src => new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
+    await load('https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js');
+    await load('https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js');
+  }
+  if (!firebase.apps.length) firebase.initializeApp(cfg);
+  _firebaseDB = firebase.database();
+  return _firebaseDB;
+}
+
+function setupFirebase() {
+  const existing = (() => { try { return JSON.parse(localStorage.getItem('vds_firebase_cfg')||'null'); } catch(e) { return null; } })();
+  const defaultVal = existing ? JSON.stringify(existing, null, 2) : `{
+  "apiKey": "YOUR_API_KEY",
+  "authDomain": "YOUR_PROJECT.firebaseapp.com",
+  "databaseURL": "https://YOUR_PROJECT-default-rtdb.firebaseio.com",
+  "projectId": "YOUR_PROJECT_ID",
+  "storageBucket": "YOUR_PROJECT.appspot.com",
+  "messagingSenderId": "YOUR_SENDER_ID",
+  "appId": "YOUR_APP_ID"
+}`;
+  let modal = el('firebase-setup-modal');
+  if (modal) { modal.classList.remove('hidden'); return; }
+  modal = document.createElement('div');
+  modal.id = 'firebase-setup-modal';
+  modal.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
+  modal.style.background = 'rgba(0,0,0,0.85)';
+  modal.innerHTML = `
+    <div class="card w-full max-w-lg flex flex-col gap-4" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between">
+        <h2 class="text-white font-bold text-lg">🔥 Firebase Setup</h2>
+        <button onclick="el('firebase-setup-modal').classList.add('hidden')" class="text-gray-500 hover:text-white text-xl">✕</button>
+      </div>
+      <ol class="text-gray-400 text-sm flex flex-col gap-1.5 list-decimal list-inside">
+        <li>Go to <a href="https://console.firebase.google.com" target="_blank" class="text-purple-400 underline">console.firebase.google.com</a> and create a project</li>
+        <li>In Project Settings → Your apps, add a Web app and copy the config</li>
+        <li>In Build → Realtime Database, create a database and set rules to <code class="bg-white/10 px-1 rounded">".read":true, ".write":true</code></li>
+        <li>Paste the config JSON below</li>
+      </ol>
+      <textarea id="firebase-cfg-input" class="input font-mono text-xs" rows="9" style="resize:vertical">${defaultVal.replace(/</g,'&lt;')}</textarea>
+      <div class="flex gap-2">
+        <button onclick="saveFirebaseConfig()" class="btn-amber flex-1">Save & Connect</button>
+        <button onclick="el('firebase-setup-modal').classList.add('hidden')" class="btn-gray">Cancel</button>
+      </div>
+    </div>`;
+  modal.onclick = () => modal.classList.add('hidden');
+  document.body.appendChild(modal);
+}
+
+async function saveFirebaseConfig() {
+  const input = el('firebase-cfg-input');
+  if (!input) return;
+  try {
+    const cfg = JSON.parse(input.value);
+    if (!cfg.apiKey || !cfg.databaseURL) { alert('Config is missing apiKey or databaseURL. Double-check you copied the full object.'); return; }
+    localStorage.setItem('vds_firebase_cfg', JSON.stringify(cfg));
+    _firebaseDB = null;
+    const db = await initFirebase();
+    if (db) { el('firebase-setup-modal').classList.add('hidden'); alert('✅ Firebase connected! You can now share albums and view the Community feed.'); if (S.route === 'community') render(); }
+    else { alert('Connection failed — check your config and make sure Realtime Database is enabled.'); }
+  } catch(e) { alert('Invalid JSON: ' + e.message); }
+}
+
+async function shareToCommunity() {
+  const db = await initFirebase();
+  if (!db) { if (confirm('Firebase isn\'t set up yet. Set it up now?')) setupFirebase(); return; }
+  const album = window._dailyAlbum;
+  if (!album) { alert('No album loaded for today.'); return; }
+  let name = localStorage.getItem('vds_display_name') || '';
+  if (!name) {
+    name = (prompt('Choose a display name for the community feed:') || '').trim();
+    if (!name) return;
+    localStorage.setItem('vds_display_name', name);
+  }
+  let uid = localStorage.getItem('vds_uid');
+  if (!uid) { uid = Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem('vds_uid', uid); }
+  const note = (prompt(`Optional: add a quick note about "${album.title}" (press OK to skip):`) || '').trim();
+  const artUrl = _artCache[`${album.title}|${album.artist}`] || '';
+  try {
+    await db.ref(`community/${today()}/${uid}`).set({
+      displayName: name,
+      albumTitle: album.title || '',
+      artist: album.artist || '',
+      rating: album.rating || album.Rating || '',
+      note: note || '',
+      artUrl: artUrl || '',
+      timestamp: Date.now()
+    });
+    alert(`✅ Shared "${album.title}" to the community feed!`);
+  } catch(e) { alert('Error sharing: ' + e.message); }
+}
+
+async function renderCommunity() {
+  const db = await initFirebase();
+  if (!db) {
+    return `<div class="p-6 max-w-2xl mx-auto">
+      <h1 class="text-2xl font-bold text-white mb-1">🌍 Community Feed</h1>
+      <p class="text-gray-500 text-sm mb-6">See what everyone's spinning each day.</p>
+      <div class="card flex flex-col items-center gap-4 text-center py-10">
+        <div class="text-5xl">🔥</div>
+        <h2 class="text-white font-bold text-lg">Connect Firebase to join</h2>
+        <p class="text-gray-500 text-sm max-w-sm">You'll need a free Firebase project. Takes about 3 minutes to set up.</p>
+        <button onclick="setupFirebase()" class="btn-amber px-8">Set Up Firebase</button>
+      </div>
+    </div>`;
+  }
+  let entries = [];
+  try {
+    const snap = await db.ref(`community/${today()}`).once('value');
+    const val = snap.val() || {};
+    entries = Object.values(val).sort((a,b) => b.timestamp - a.timestamp);
+  } catch(e) {}
+  const rColor = r => { const n=Number(r); if(n>=9)return'#4ade80'; if(n>=7)return'#c4b5fd'; if(n>=5)return'#fbbf24'; return'#f87171'; };
+  const esc = s => (s||'').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const myUid = localStorage.getItem('vds_uid') || '';
+  return `<div class="p-6 max-w-2xl mx-auto">
+    <div class="flex items-center justify-between mb-1">
+      <h1 class="text-2xl font-bold text-white">🌍 Community Feed</h1>
+      <button onclick="setupFirebase()" class="text-xs text-gray-600 hover:text-gray-400">⚙ Config</button>
+    </div>
+    <p class="text-gray-500 text-sm mb-5">Today's picks — ${fmt_date(today())}</p>
+    ${!entries.length ? `
+    <div class="card flex flex-col items-center gap-3 text-center py-10">
+      <div class="text-4xl">🎵</div>
+      <p class="text-gray-400">No one has shared today yet. Be the first!</p>
+      <button onclick="shareToCommunity()" class="btn-amber mt-2">Share My Album</button>
+    </div>` : `
+    <div class="flex flex-col gap-3 mb-5">
+      ${entries.map(e => `
+      <div class="card flex items-center gap-4 ${e.uid === myUid ? 'border-purple-500/30' : ''}">
+        <div class="w-14 h-14 rounded-xl overflow-hidden flex-shrink-0 bg-gradient-to-br from-purple-900 to-violet-950 flex items-center justify-center">
+          ${e.artUrl ? `<img src="${esc(e.artUrl)}" class="w-full h-full object-cover" onerror="this.style.display='none'" />` : `<div class="text-gray-600">${icons.music}</div>`}
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="text-white font-semibold truncate">${esc(e.albumTitle)}</span>
+            ${e.rating ? `<span class="font-bold text-sm" style="color:${rColor(e.rating)}">${e.rating}</span>` : ''}
+          </div>
+          <div class="text-purple-300 text-sm truncate">${esc(e.artist)}</div>
+          ${e.note ? `<p class="text-gray-400 text-xs mt-1 italic">"${esc(e.note)}"</p>` : ''}
+          <div class="text-gray-600 text-xs mt-1">— ${esc(e.displayName)}</div>
+        </div>
+      </div>`).join('')}
+    </div>
+    <button onclick="shareToCommunity()" class="btn-gray w-full">＋ Share my album for today</button>`}
   </div>`;
 }
 
