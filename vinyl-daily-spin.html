@@ -24,8 +24,17 @@ tailwind.config = {
     --at: #c084fc; /* accent text */
     --al: #e9d5ff; /* accent text light */
     --ar: 147; --ag: 51; --ab: 234; /* RGB for rgba() */
+    --body-bg: #09080f;
+    --card-bg: #100d1e;
+    --card-border: #1e1535;
+    --input-bg: #1a1232;
+    --sidebar-from: #0f0b1e;
+    --sidebar-to: #0a0815;
+    --card-radius: 16px;
+    --card-glow: none;
+    --ui-radius: 10px;
   }
-  body { background: #09080f; color: #f3f4f6; font-family: system-ui, sans-serif; }
+  body { background: var(--body-bg); color: #f3f4f6; font-family: system-ui, sans-serif; transition: background .35s, color .35s; }
   .spin { animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .fade-in { animation: fadeIn .2s ease; }
@@ -35,31 +44,45 @@ tailwind.config = {
   .nav-link { display:flex; align-items:center; gap:10px; padding:8px 12px; border-radius:8px; font-size:14px; font-weight:500; cursor:pointer; transition:all .15s; color:#9ca3af; border:1px solid transparent; }
   .nav-link:hover { background:rgba(var(--ar),var(--ag),var(--ab),.08); color:var(--al); }
   .nav-link.active { background:rgba(var(--ar),var(--ag),var(--ab),.18); color:var(--at); border-color:rgba(var(--ar),var(--ag),var(--ab),.3); }
-  .btn-amber { background:var(--a); color:#fff; padding:10px 20px; border-radius:10px; font-weight:600; font-size:14px; cursor:pointer; transition:all .15s; border:none; }
+  .btn-amber { background:var(--a); color:#fff; padding:10px 20px; border-radius:var(--ui-radius); font-weight:600; font-size:14px; cursor:pointer; transition:all .15s; border:none; }
   .btn-amber:hover { background:var(--ah); }
   .btn-amber:disabled { opacity:.5; cursor:not-allowed; }
-  .btn-gray { background:#1a1232; color:#d1d5db; padding:10px 20px; border-radius:10px; font-weight:500; font-size:14px; cursor:pointer; transition:all .15s; border:1px solid rgba(var(--ar),var(--ag),var(--ab),.25); }
+  .btn-gray { background:var(--input-bg); color:#d1d5db; padding:10px 20px; border-radius:var(--ui-radius); font-weight:500; font-size:14px; cursor:pointer; transition:all .15s; border:1px solid rgba(var(--ar),var(--ag),var(--ab),.25); }
   .btn-gray:hover { background:rgba(var(--ar),var(--ag),var(--ab),.12); }
-  .card { background:#100d1e; border:1px solid #1e1535; border-radius:16px; padding:20px; }
+  .card { background:var(--card-bg); border:1px solid var(--card-border); border-radius:var(--card-radius); padding:20px; box-shadow:var(--card-glow); transition:background .35s, border-color .35s, box-shadow .35s; }
   .card:hover { border-color:rgba(var(--ar),var(--ag),var(--ab),.3); }
-  .input { background:#1a1232; border:1px solid rgba(var(--ar),var(--ag),var(--ab),.25); color:#f3f4f6; padding:10px 14px; border-radius:10px; font-size:14px; width:100%; outline:none; transition:border .15s; }
+  .input { background:var(--input-bg); border:1px solid rgba(var(--ar),var(--ag),var(--ab),.25); color:#f3f4f6; padding:10px 14px; border-radius:var(--ui-radius); font-size:14px; width:100%; outline:none; transition:border .15s; }
   .input:focus { border-color:var(--a); }
   .input::placeholder { color:#6b7280; }
-  select.input option { background:#1a1232; }
+  select.input option { background:var(--input-bg); }
   .mood-pill { padding:4px 10px; border-radius:20px; font-size:12px; font-weight:500; }
   .genre-pill { background:rgba(var(--ar),var(--ag),var(--ab),.2); color:var(--at); padding:4px 10px; border-radius:20px; font-size:12px; font-weight:500; }
-  #sidebar { transition: transform .25s; background: linear-gradient(180deg, #0f0b1e 0%, #0a0815 100%); }
+  #sidebar { transition: transform .25s; background: linear-gradient(180deg, var(--sidebar-from) 0%, var(--sidebar-to) 100%); }
   #overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:30; }
   .vinyl-groove { background: repeating-radial-gradient(circle at center, transparent 0px, transparent 8px, rgba(255,255,255,0.03) 8px, rgba(255,255,255,0.03) 9px); }
   /* Tailwind purple override — updated by applyTheme() */
   .theme-accent-fill { fill: var(--a) !important; }
-  .theme-swatch { width:18px; height:18px; border-radius:50%; cursor:pointer; border:2px solid transparent; transition:transform .15s, border-color .15s; flex-shrink:0; }
+  .theme-swatch { width:18px; height:18px; border-radius:50%; cursor:pointer; border:2px solid transparent; transition:transform .15s, border-color .15s; flex-shrink:0; position:relative; }
   .theme-swatch:hover { transform:scale(1.2); }
   .theme-swatch.active { border-color:rgba(255,255,255,0.6); transform:scale(1.15); }
+  .theme-swatch::after { content:attr(title); position:absolute; bottom:calc(100% + 6px); left:50%; transform:translateX(-50%) scale(0.8); background:#1a1a2e; color:#f3f4f6; font-size:11px; font-family:system-ui,sans-serif; font-weight:500; white-space:nowrap; padding:3px 8px; border-radius:6px; border:1px solid rgba(255,255,255,0.12); pointer-events:none; opacity:0; transition:opacity .15s, transform .15s; z-index:100; }
+  .theme-swatch:hover::after { opacity:1; transform:translateX(-50%) scale(1); }
+  @media(min-width:1280px){#app{margin-right:272px;}}
+  #right-panel{width:272px;border-left:1px solid rgba(var(--ar),var(--ag),var(--ab),.15);background:linear-gradient(180deg,var(--sidebar-from),var(--sidebar-to));transition:background .35s;}
+  @keyframes deco-checker{from{background-position:0 0}to{background-position:52px 52px}}
+  @keyframes deco-flannel{from{background-position:0 0,0 0,0 0,0 0}to{background-position:20px 20px,40px 40px,20px 20px,40px 40px}}
+  @keyframes deco-flannel-buf{from{background-position:0 0,0 0}to{background-position:72px 72px,72px 72px}}
+  @keyframes deco-grid-drift{from{background-position:0 0,0 0}to{background-position:44px 44px,44px 44px}}
+  @keyframes deco-synth-grid{from{background-position:0 0,0 0,0 0}to{background-position:60px 60px,60px 60px,0 0}}
+  @keyframes deco-spin-slow{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+  @keyframes deco-stars-drift{from{transform:translateY(0)}to{transform:translateY(-20px)}}
 </style>
 <style id="theme-tw">/* Tailwind overrides injected by applyTheme() */</style>
 </head>
 <body>
+
+<!-- THEME OVERLAY (scan lines, grain, etc — activated per theme) -->
+<div id="theme-overlay" style="display:none;position:fixed;inset:0;pointer-events:none;z-index:9999;"></div>
 
 <!-- CARD CONTEXT MENU -->
 <div id="card-menu" class="hidden fixed z-50 rounded-lg shadow-xl py-1 min-w-[160px] border border-gray-700" style="background:#1a1a2e"></div>
@@ -155,6 +178,21 @@ tailwind.config = {
     <div><div class="text-white font-bold text-sm tracking-wide">Vinyl Daily Spin</div><div class="text-purple-400/60 text-xs">Music Journal</div></div>
   </div>
   <nav id="sidebar-nav" class="flex-1 p-3 flex flex-col gap-1 overflow-y-auto"></nav>
+
+  <!-- SIDEBAR DAILY SPIN CARD -->
+  <div id="sb-daily" style="display:none;margin:0 12px 12px;border-radius:14px;overflow:hidden;border:1px solid rgba(var(--ar),var(--ag),var(--ab),.18);background:rgba(var(--ar),var(--ag),var(--ab),.06);flex-shrink:0">
+    <div style="padding:8px 10px 4px;display:flex;align-items:center;gap:6px">
+      <span style="font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(var(--ar),var(--ag),var(--ab),.6)">★ Today's Spin</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;padding:0 10px 10px">
+      <div id="sb-art" style="width:52px;height:52px;flex-shrink:0;border-radius:8px;overflow:hidden;background:#0a0816;display:flex;align-items:center;justify-content:center;font-size:1.4rem;color:rgba(var(--ar),var(--ag),var(--ab),.25);box-shadow:0 2px 10px rgba(0,0,0,0.4)">♫</div>
+      <div style="min-width:0">
+        <p id="sb-title" style="color:#fff;font-weight:700;font-size:12px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">—</p>
+        <p id="sb-artist" style="color:rgba(var(--ar),var(--ag),var(--ab),.6);font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">—</p>
+      </div>
+    </div>
+  </div>
+
   <div class="p-4 border-t border-purple-900/40">
     <button onclick="openSettings()" class="w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-white transition-colors" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.06)">
       <span>⚙️ Settings</span>
@@ -187,6 +225,22 @@ tailwind.config = {
 
 <!-- MAIN CONTENT -->
 <main id="app" class="md:ml-56 pt-14 md:pt-0 min-h-screen"></main>
+
+<!-- RIGHT DECORATIVE PANEL (xl screens only) -->
+<div id="right-panel" class="hidden xl:flex fixed right-0 top-0 bottom-0 flex-col z-20 overflow-hidden">
+  <!-- Album art (square) -->
+  <div id="rp-art-wrap" class="w-full relative flex-shrink-0" style="aspect-ratio:1;background:#050510">
+    <div id="rp-art" class="absolute inset-0 flex items-center justify-center" style="font-size:4rem;color:#1f2937">♫</div>
+  </div>
+  <!-- Album info -->
+  <div class="px-4 pt-3 pb-3 flex-shrink-0" style="border-bottom:1px solid rgba(var(--ar),var(--ag),var(--ab),.12)">
+    <p class="text-xs font-bold uppercase tracking-widest mb-1" style="color:var(--at)">Today's Spin</p>
+    <p id="rp-title" class="text-white font-bold text-sm leading-tight truncate">—</p>
+    <p id="rp-artist" class="text-gray-400 text-xs mt-0.5 truncate">—</p>
+  </div>
+  <!-- Theme decoration — fills remaining space -->
+  <div id="rp-deco" class="flex-1 relative overflow-hidden"></div>
+</div>
 
 <script>
 // ─── STATE ────────────────────────────────────────────────────────────────────
@@ -1906,12 +1960,20 @@ function navigate(route, data) {
   S.routeData = data || null;
   location.hash = route;
   closeSidebar();
+  // Hide sidebar daily card immediately on Today's Album
+  const _sbd = document.getElementById('sb-daily');
+  if (_sbd) _sbd.style.display = route === 'home' ? 'none' : _sbd.style.display;
   render();
   window.scrollTo(0,0);
 }
 window.addEventListener('hashchange', () => {
   const r = location.hash.replace('#','') || 'home';
-  if (r !== S.route) { S.route = r; render(); }
+  if (r !== S.route) {
+    S.route = r;
+    const _sbd = document.getElementById('sb-daily');
+    if (_sbd) _sbd.style.display = r === 'home' ? 'none' : _sbd.style.display;
+    render();
+  }
 });
 
 function toggleSidebar() { S.drawerOpen ? closeSidebar() : openSidebar(); }
@@ -1990,6 +2052,8 @@ function postRender() {
   }
   // Lazy-load art on all cards — slight delay so DOM is fully settled
   setTimeout(loadLazyArt, 50);
+  // Update right panel
+  renderRightPanel();
 }
 
 // ─── SETUP SCREEN ────────────────────────────────────────────────────────────
@@ -3943,9 +4007,419 @@ async function renderCommunity() {
   </div>`;
 }
 
+// ─── RIGHT PANEL ─────────────────────────────────────────────────────────────
+const THEME_DECOS = {
+  chequered: `
+    <div style="position:absolute;inset:0;
+      background:repeating-conic-gradient(#2e2e2e 0% 25%,#080808 0% 50%) 0 0/52px 52px;
+      animation:deco-checker 1.4s linear infinite"></div>
+    <div style="position:absolute;inset:0;background:linear-gradient(135deg,rgba(0,0,0,0.6) 0%,transparent 50%,rgba(0,0,0,0.6) 100%)"></div>`,
+
+  flannel: `
+    <div style="position:absolute;inset:0;
+      background-color:#c8900a;
+      background-image:
+        linear-gradient(90deg,transparent 0%,transparent 25%,#0a0a00 25%,#0a0a00 75%,transparent 75%,transparent 100%),
+        linear-gradient(180deg,transparent 0%,transparent 25%,#0a0a00 25%,#0a0a00 75%,transparent 75%,transparent 100%);
+      background-size:72px 72px,72px 72px;
+      background-repeat:repeat,repeat;
+      animation:deco-flannel-buf 4s linear infinite">
+    </div>
+    <div style="position:absolute;inset:0;pointer-events:none;
+      background-image:repeating-linear-gradient(45deg,rgba(0,0,0,0.22) 0px,rgba(0,0,0,0.22) 1px,transparent 1px,transparent 5px)">
+    </div>`,
+
+  minecraft: `
+    <div style="position:absolute;inset:0;overflow:hidden;font-family:monospace">
+      <div style="position:absolute;top:0;bottom:36%;left:0;right:0;
+        background:repeating-linear-gradient(rgba(0,0,0,0.45) 0px,rgba(0,0,0,0.45) 1px,transparent 1px,transparent 32px),
+                   repeating-linear-gradient(90deg,rgba(0,0,0,0.45) 0px,rgba(0,0,0,0.45) 1px,transparent 1px,transparent 32px),
+                   #1a1a0a;
+        animation:deco-grid-drift 2s linear infinite"></div>
+      <div style="position:absolute;bottom:0;left:0;right:0;height:36%">
+        <div style="height:20px;background:linear-gradient(#22c55e,#16a34a)"></div>
+        <div style="background:linear-gradient(#7c5c2a,#5c3a1a);height:calc(100% - 20px)"></div>
+      </div>
+      <div style="position:absolute;bottom:36%;left:50%;transform:translate(-50%,50%);
+        width:38px;height:38px;background:#d97706;border:3px solid #92400e;
+        display:flex;align-items:center;justify-content:center;
+        font-weight:900;font-size:24px;color:#fff;box-shadow:0 4px 0 #451a00">?</div>
+      <div style="position:absolute;top:10px;left:10px;width:30px;height:30px;background:rgba(34,197,94,0.18);border:2px solid rgba(34,197,94,0.4)"></div>
+      <div style="position:absolute;top:10px;right:16px;width:22px;height:22px;background:rgba(34,197,94,0.12);border:2px solid rgba(34,197,94,0.3)"></div>
+    </div>`,
+
+  mario: `
+    <div style="position:absolute;inset:0;overflow:hidden">
+      <div style="position:absolute;inset:0;background:linear-gradient(to bottom,#1a1a6a,#2929a0 60%,#1a1a6a)"></div>
+      <div style="position:absolute;top:14%;left:10%;width:56px;height:34px;background:rgba(255,255,255,0.13);border-radius:50% 50% 0 0;filter:blur(5px)"></div>
+      <div style="position:absolute;top:8%;right:14%;width:74px;height:42px;background:rgba(255,255,255,0.1);border-radius:50% 50% 0 0;filter:blur(6px)"></div>
+      <div style="position:absolute;top:26%;left:54%;width:38px;height:26px;background:rgba(255,255,255,0.08);border-radius:50%;filter:blur(3px)"></div>
+      <div style="position:absolute;bottom:0;left:0;right:0;height:28%;background:linear-gradient(#22c55e,#16a34a 40%,#15803d)"></div>
+      <div style="position:absolute;bottom:28%;left:44%;transform:translateY(50%);
+        background:#ef4444;width:30px;height:26px;border-radius:50% 50% 0 0;box-shadow:inset 0 -4px rgba(0,0,0,0.3)"></div>
+      <div style="position:absolute;bottom:32%;right:18%;
+        width:24px;height:24px;background:#d97706;border:2px solid #92400e;
+        display:flex;align-items:center;justify-content:center;
+        font-weight:900;font-size:15px;color:#fff;font-family:monospace">?</div>
+    </div>`,
+
+  cyberpunk: `
+    <div style="position:absolute;inset:0;overflow:hidden">
+      <div style="position:absolute;inset:0;
+        background:repeating-linear-gradient(rgba(6,182,212,0.08) 0px,rgba(6,182,212,0.08) 1px,transparent 1px,transparent 44px),
+                   repeating-linear-gradient(90deg,rgba(6,182,212,0.08) 0px,rgba(6,182,212,0.08) 1px,transparent 1px,transparent 44px);
+        animation:deco-grid-drift 3s linear infinite"></div>
+      <div style="position:absolute;top:28%;left:0;right:0;height:1px;background:rgba(6,182,212,0.5);box-shadow:0 0 10px rgba(6,182,212,1)"></div>
+      <div style="position:absolute;top:58%;left:0;right:0;height:1px;background:rgba(6,182,212,0.25)"></div>
+      <div style="position:absolute;top:15%;left:16%;width:68%;text-align:center;font-family:monospace;font-size:11px;color:rgba(6,182,212,0.65);line-height:2">
+        <div>SYS://VINYL.OS</div>
+        <div style="color:rgba(6,182,212,0.35)">TRACK: LOADED</div>
+        <div style="color:rgba(6,182,212,0.35)">QUEUE: ACTIVE</div>
+        <div style="margin-top:10px;color:rgba(6,182,212,0.55);border:1px solid rgba(6,182,212,0.35);padding:5px;font-size:10px">[ PLAY ]</div>
+      </div>
+      <div style="position:absolute;bottom:14px;left:0;right:0;text-align:center;font-family:monospace;font-size:9px;color:rgba(6,182,212,0.35)">▓▓▒▒░░ SIGNAL STRONG</div>
+    </div>`,
+
+  vinyl: `
+    <div style="position:absolute;inset:0;overflow:hidden;background:#0e0606">
+
+      <!-- Tin ceiling -->
+      <div style="position:absolute;top:0;left:0;right:0;height:14%;
+        background:
+          repeating-linear-gradient(45deg,rgba(210,210,210,0.07) 0px,rgba(210,210,210,0.07) 1px,transparent 1px,transparent 7px),
+          repeating-linear-gradient(-45deg,rgba(210,210,210,0.05) 0px,rgba(210,210,210,0.05) 1px,transparent 1px,transparent 7px),
+          linear-gradient(180deg,#1e1a1a,#151010)">
+      </div>
+
+      <!-- Red trim stripe -->
+      <div style="position:absolute;top:14%;left:0;right:0;height:5px;background:#b91c1c;box-shadow:0 0 8px rgba(185,28,28,0.6)"></div>
+
+      <!-- Wall -->
+      <div style="position:absolute;top:calc(14% + 5px);left:0;right:0;bottom:42%;
+        background:repeating-linear-gradient(90deg,rgba(185,28,28,0.18) 0px,rgba(185,28,28,0.18) 18px,transparent 18px,transparent 36px),
+                   #120808">
+      </div>
+
+      <!-- Jukebox -->
+      <div style="position:absolute;top:18%;left:50%;transform:translateX(-50%);width:72px">
+        <!-- Arch -->
+        <div style="width:72px;height:52px;background:linear-gradient(135deg,#d4a008,#92700a);border-radius:36px 36px 0 0;position:relative;box-shadow:0 2px 12px rgba(0,0,0,0.6)">
+          <div style="position:absolute;top:6px;left:6px;right:6px;bottom:0;background:#0a0505;border-radius:30px 30px 0 0">
+            <div style="position:absolute;inset:5px;
+              background:repeating-linear-gradient(0deg,rgba(180,120,10,0.35) 0px,rgba(180,120,10,0.35) 2px,transparent 2px,transparent 5px);
+              border-radius:25px 25px 0 0"></div>
+            <div style="position:absolute;top:6px;left:50%;transform:translateX(-50%);
+              width:20px;height:20px;border-radius:50%;
+              background:radial-gradient(circle,rgba(255,200,50,0.6),rgba(200,100,0,0.3));
+              box-shadow:0 0 8px rgba(255,180,0,0.4)"></div>
+          </div>
+        </div>
+        <!-- Body -->
+        <div style="width:72px;height:34px;background:linear-gradient(135deg,#b8860a,#7a5a06);box-shadow:0 2px 8px rgba(0,0,0,0.5)">
+          <div style="margin:4px 4px 2px;height:16px;background:#7f1d1d;border-radius:2px;display:flex;align-items:center;justify-content:center">
+            <span style="font-size:6px;color:rgba(255,220,100,0.9);font-family:Georgia,serif;letter-spacing:1.5px;text-transform:uppercase">Jukebox</span>
+          </div>
+          <div style="margin:0 4px;height:8px;
+            background:repeating-linear-gradient(90deg,#b91c1c 0px,#b91c1c 4px,#1a0a0a 4px,#1a0a0a 8px)">
+          </div>
+        </div>
+        <!-- Base -->
+        <div style="width:72px;height:14px;background:linear-gradient(135deg,#92700a,#5a4406);border-radius:0 0 8px 8px"></div>
+      </div>
+
+      <!-- Red baseboard -->
+      <div style="position:absolute;bottom:42%;left:0;right:0;height:4px;background:#b91c1c"></div>
+
+      <!-- Checkerboard floor in perspective -->
+      <div style="position:absolute;bottom:0;left:-30%;right:-30%;height:44%;
+        background:repeating-conic-gradient(#d8d8d8 0% 25%,#141414 0% 50%) 0 0/26px 26px;
+        transform:perspective(120px) rotateX(48deg);
+        transform-origin:bottom center">
+      </div>
+
+      <!-- Vignette -->
+      <div style="position:absolute;inset:0;background:radial-gradient(ellipse at 50% 60%,transparent 30%,rgba(0,0,0,0.55) 100%);pointer-events:none"></div>
+    </div>`,
+
+  midnight: `
+    <div style="position:absolute;inset:0;background:#000;display:flex;align-items:center;justify-content:center">
+      <div style="position:relative;width:100px;height:100px">
+        <div style="position:absolute;inset:0;border-radius:50%;border:1px solid rgba(255,255,255,0.04)"></div>
+        <div style="position:absolute;inset:12px;border-radius:50%;border:1px solid rgba(255,255,255,0.06)"></div>
+        <div style="position:absolute;inset:24px;border-radius:50%;border:1px solid rgba(255,255,255,0.08)"></div>
+        <div style="position:absolute;inset:36px;border-radius:50%;border:1px solid rgba(255,255,255,0.05)"></div>
+        <div style="position:absolute;top:50%;left:0;right:0;height:1px;background:linear-gradient(to right,transparent,rgba(255,255,255,0.06),transparent);transform:translateY(-50%)"></div>
+        <div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:linear-gradient(to bottom,transparent,rgba(255,255,255,0.06),transparent);transform:translateX(-50%)"></div>
+      </div>
+    </div>`,
+
+  paper: `
+    <div style="position:absolute;inset:0;background:#f0ebe1">
+      <div style="position:absolute;inset:0;
+        background:repeating-linear-gradient(transparent 0px,transparent 27px,rgba(150,150,200,0.32) 27px,rgba(150,150,200,0.32) 28px)"></div>
+      <div style="position:absolute;top:0;bottom:0;left:28px;width:1px;background:rgba(220,100,100,0.28)"></div>
+      <div style="position:absolute;top:16px;left:40px;right:12px;color:rgba(80,80,120,0.45);font-family:Georgia,serif;font-size:13px;line-height:28px">
+        <div style="font-weight:bold;margin-bottom:4px">Today's listen:</div>
+        <div id="rp-paper-title" style="font-style:italic;color:rgba(50,50,90,0.55)"></div>
+        <div style="margin-top:28px;color:rgba(120,100,80,0.38);font-size:11px">⭐ Rate it after</div>
+        <div style="margin-top:28px;color:rgba(100,100,140,0.25);font-size:10px">____________</div>
+        <div style="margin-top:0;color:rgba(100,100,140,0.2);font-size:10px">____________</div>
+      </div>
+    </div>`,
+
+  synthwave: `
+    <div style="position:absolute;inset:0;overflow:hidden;background:#0a0014">
+      <div style="position:absolute;top:10%;left:50%;transform:translateX(-50%);
+        width:130px;height:130px;border-radius:50%;
+        background:radial-gradient(circle,rgba(251,191,36,0.95) 0%,rgba(239,68,68,0.75) 38%,rgba(168,85,247,0.35) 65%,transparent 100%);
+        box-shadow:0 0 50px rgba(251,191,36,0.5),0 0 100px rgba(239,68,68,0.25)"></div>
+      <div style="position:absolute;top:55%;left:0;right:0;height:2px;background:rgba(232,121,249,0.7);box-shadow:0 0 10px rgba(232,121,249,1),0 0 20px rgba(232,121,249,0.5)"></div>
+      <div style="position:absolute;top:55%;left:0;right:0;bottom:0;overflow:hidden">
+        <div style="position:absolute;inset:0;
+          background:
+            repeating-linear-gradient(rgba(232,121,249,0.14) 0px,rgba(232,121,249,0.14) 1px,transparent 1px,transparent 22px),
+            repeating-linear-gradient(90deg,rgba(232,121,249,0.1) 0px,rgba(232,121,249,0.1) 1px,transparent 1px,transparent 30px);
+          animation:deco-synth-grid 2.5s linear infinite"></div>
+      </div>
+    </div>`,
+
+  space: `
+    <div style="position:absolute;inset:0;background:#020208;overflow:hidden">
+      <div style="animation:deco-stars-drift 8s linear infinite alternate;position:absolute;inset:-20px 0 0">
+        <div style="position:absolute;top:10%;left:26%;width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.95);box-shadow:0 0 8px rgba(255,255,255,0.9)"></div>
+        <div style="position:absolute;top:20%;right:22%;width:5px;height:5px;border-radius:50%;background:rgba(200,230,255,0.85)"></div>
+        <div style="position:absolute;top:4%;left:58%;width:3px;height:3px;border-radius:50%;background:rgba(255,240,200,0.95)"></div>
+        <div style="position:absolute;top:32%;left:14%;width:2px;height:2px;border-radius:50%;background:rgba(255,255,255,0.7)"></div>
+        <div style="position:absolute;top:7%;left:42%;width:2px;height:2px;border-radius:50%;background:rgba(255,255,255,0.75)"></div>
+        <div style="position:absolute;top:16%;left:78%;width:3px;height:3px;border-radius:50%;background:rgba(255,255,255,0.6)"></div>
+        <div style="position:absolute;top:40%;right:8%;width:4px;height:4px;border-radius:50%;background:rgba(180,210,255,0.8)"></div>
+        <div style="position:absolute;top:2%;left:8%;width:2px;height:2px;border-radius:50%;background:rgba(255,255,255,0.5)"></div>
+      </div>
+      <div style="position:absolute;bottom:25%;left:50%;transform:translateX(-50%);
+        width:95px;height:95px;border-radius:50%;
+        background:radial-gradient(circle at 35% 30%,rgba(120,175,255,0.95),rgba(25,70,180,0.8) 50%,rgba(5,12,50,0.6) 100%);
+        box-shadow:0 0 25px rgba(56,189,248,0.25),0 0 50px rgba(20,80,200,0.12)"></div>
+      <div style="position:absolute;bottom:25%;left:50%;transform:translate(-50%,52px);
+        width:136px;height:18px;background:rgba(56,189,248,0.07);border-radius:50%;filter:blur(5px)"></div>
+    </div>`,
+
+  _default: `
+    <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:20px">
+      <div style="width:80px;height:80px;border-radius:50%;border:2px solid rgba(var(--ar),var(--ag),var(--ab),.2);display:flex;align-items:center;justify-content:center;font-size:2rem;opacity:0.4">🎵</div>
+      <p style="color:rgba(var(--ar),var(--ag),var(--ab),.35);font-size:11px;text-align:center;letter-spacing:0.1em;text-transform:uppercase">Keep Spinning</p>
+    </div>`
+};
+
+function renderRightPanel() {
+  const panel = document.getElementById('right-panel');
+  if (!panel) return;
+  const auth = S.clientId && S.token && S.sheetId;
+  panel.style.display = auth ? '' : 'none';
+  if (!auth) return;
+
+  // Album art
+  const album = window._dailyAlbum;
+  const artEl  = document.getElementById('rp-art');
+  const titleEl  = document.getElementById('rp-title');
+  const artistEl = document.getElementById('rp-artist');
+  if (album) {
+    const key = `${album.title}|${album.artist}`;
+    const art = _artCache[key];
+    if (artEl) artEl.innerHTML = art
+      ? `<img src="${art}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" onerror="this.style.display='none'" />`
+      : `<div style="font-size:4rem;color:#1f2937">♫</div>`;
+    if (titleEl)  titleEl.textContent  = cleanTitle(album.title  || '—');
+    if (artistEl) artistEl.textContent = album.artist || '—';
+  }
+
+  // Theme decoration
+  const decoEl = document.getElementById('rp-deco');
+  if (decoEl) {
+    const theme = localStorage.getItem('vds_theme') || 'purple';
+    decoEl.innerHTML = THEME_DECOS[theme] || THEME_DECOS._default;
+    // For paper theme, fill in the album title
+    const paperTitle = decoEl.querySelector('#rp-paper-title');
+    if (paperTitle && album) paperTitle.textContent = cleanTitle(album.title || '');
+  }
+
+  // Sidebar daily spin card
+  const sbCard   = document.getElementById('sb-daily');
+  const sbArt    = document.getElementById('sb-art');
+  const sbTitle  = document.getElementById('sb-title');
+  const sbArtist = document.getElementById('sb-artist');
+  if (sbCard) sbCard.style.display = (album && S.route !== 'home') ? '' : 'none';
+  if (album && sbArt) {
+    const key = `${album.title}|${album.artist}`;
+    const art = _artCache[key];
+    sbArt.innerHTML = art
+      ? `<img src="${art}" style="width:100%;height:100%;object-fit:cover" onerror="this.innerHTML='♫'" />`
+      : '♫';
+  }
+  if (sbTitle)  sbTitle.textContent  = album ? cleanTitle(album.title  || '—') : '—';
+  if (sbArtist) sbArtist.textContent = album ? (album.artist || '—') : '—';
+}
+
 // ─── BOOT ────────────────────────────────────────────────────────────────────
 // ─── THEME ENGINE ─────────────────────────────────────────────────────────────
 const THEMES = {
+  // ── Visual / Stylistic ───────────────────────────────────────────────────────
+  chequered:{ name:'Chequered', visual:true,
+    swatchBg:'repeating-conic-gradient(#444 0% 25%,#111 0% 50%) 0 0/8px 8px', swatch:'#222',
+    r:200,g:200,b:200, accent:'#d0d0d0',hover:'#a0a0a0',text:'#ffffff',light:'#cccccc',
+    bodyBg:'#0c0c0c',
+    cardBg:'rgba(18,18,18,0.78)',          // semi-transparent — checkerboard bleeds through
+    cardBorder:'rgba(255,255,255,0.12)',inputBg:'rgba(28,28,28,0.9)',
+    sidebarFrom:'rgba(14,14,14,0.97)',sidebarTo:'rgba(8,8,8,0.97)',
+    cardRadius:'12px',
+    pattern:'repeating-conic-gradient(#2e2e2e 0% 25%,#080808 0% 50%) 0 0/52px 52px',
+    extraCSS:`.card{border:1px solid rgba(255,255,255,0.12)!important;backdrop-filter:blur(0px);}
+      .card:hover{border-color:rgba(255,255,255,0.28)!important;}
+      #sidebar{border-right:1px solid rgba(255,255,255,0.08);}` },
+
+  flannel:  { name:'Flannel', visual:true,
+    swatchBg:'repeating-conic-gradient(#f59e0b 0% 25%,#0a0a00 0% 50%) 0 0/8px 8px',
+    swatch:'#f59e0b',
+    r:245,g:158,b:11, accent:'#f59e0b',hover:'#d97706',text:'#fcd34d',light:'#fef3c7',
+    bodyBg:'#0d0b00',
+    cardBg:'#1a1600',
+    cardBorder:'rgba(245,158,11,0.2)',inputBg:'#1f1a00',
+    sidebarFrom:'#110f00',sidebarTo:'#0a0800',
+    extraCSS:`.card{border-left:3px solid rgba(245,158,11,0.35)!important;}
+      .card:hover{border-left-color:rgba(245,158,11,0.7)!important;}` },
+
+  minecraft:{ name:'Minecraft', visual:true,
+    swatchBg:'repeating-conic-gradient(#22c55e 0% 25%,#16a34a 0% 50%) 0 0/8px 8px',
+    swatch:'#22c55e',
+    r:34,g:197,b:94, accent:'#22c55e',hover:'#16a34a',text:'#86efac',light:'#bbf7d0',
+    bodyBg:'#1a1a0a',
+    cardBg:'rgba(28,28,14,0.92)',
+    cardBorder:'rgba(34,197,94,0.35)',inputBg:'rgba(22,22,10,0.95)',
+    sidebarFrom:'rgba(20,20,8,0.98)',sidebarTo:'rgba(14,14,5,0.98)',
+    cardRadius:'3px', uiRadius:'2px',
+    font:'"Courier New",monospace',
+    // Dirt/stone tile grid
+    pattern:'linear-gradient(rgba(0,0,0,0.5) 1px,transparent 1px),linear-gradient(90deg,rgba(0,0,0,0.5) 1px,transparent 1px),linear-gradient(rgba(34,197,94,0.03) 0%,transparent 100%)',
+    patternSize:'32px 32px,32px 32px,100% 100%',
+    extraCSS:`.card{border-radius:3px!important;border:2px solid rgba(34,197,94,0.4)!important;box-shadow:0 0 8px rgba(34,197,94,0.08),inset 0 0 0 1px rgba(34,197,94,0.1)!important;}
+      .card:hover{border-color:rgba(34,197,94,0.7)!important;box-shadow:0 0 16px rgba(34,197,94,0.18)!important;}
+      .btn-amber,.btn-gray,.input{border-radius:2px!important;}
+      .nav-link{border-radius:2px!important;}` },
+
+  mario:    { name:'Mario', visual:true,
+    swatchBg:'linear-gradient(135deg,#ef4444 50%,#2929c9 50%)', swatch:'#ef4444',
+    r:239,g:68,b:68, accent:'#ef4444',hover:'#dc2626',text:'#fca5a5',light:'#fee2e2',
+    bodyBg:'#05052a',
+    cardBg:'rgba(10,10,50,0.84)',
+    cardBorder:'rgba(239,68,68,0.25)',inputBg:'rgba(12,12,56,0.95)',
+    sidebarFrom:'rgba(8,8,38,0.98)',sidebarTo:'rgba(5,5,28,0.98)',
+    // Brick wall pattern
+    pattern:[
+      'repeating-linear-gradient(0deg,rgba(139,69,19,0.18) 0px,rgba(139,69,19,0.18) 1px,transparent 1px,transparent 28px)',
+      'repeating-linear-gradient(90deg,rgba(139,69,19,0.18) 0px,rgba(139,69,19,0.18) 1px,transparent 1px,transparent 48px)',
+      'repeating-linear-gradient(0deg,transparent 0px,transparent 14px,rgba(139,69,19,0.1) 14px,rgba(139,69,19,0.1) 15px,transparent 15px,transparent 28px)',
+    ].join(','),
+    extraCSS:`.card{border-top:2px solid rgba(239,68,68,0.4)!important;box-shadow:0 4px 0 rgba(0,0,0,0.5),0 0 20px rgba(239,68,68,0.06)!important;}
+      .card:hover{box-shadow:0 4px 0 rgba(0,0,0,0.5),0 0 24px rgba(239,68,68,0.18)!important;border-top-color:rgba(239,68,68,0.7)!important;}` },
+
+  cyberpunk:{ name:'Cyberpunk', visual:true,
+    swatchBg:'linear-gradient(135deg,#000 40%,#062a30 40%)', swatch:'#06b6d4',
+    r:6,g:182,b:212, accent:'#06b6d4',hover:'#0891b2',text:'#67e8f9',light:'#cffafe',
+    bodyBg:'#000000',
+    cardBg:'rgba(4,4,4,0.85)',
+    cardBorder:'rgba(6,182,212,0.22)',inputBg:'rgba(8,8,8,0.95)',
+    sidebarFrom:'rgba(2,2,2,0.99)',sidebarTo:'rgba(0,0,0,0.99)',
+    cardRadius:'6px', uiRadius:'4px',
+    font:'"Courier New",monospace',
+    // Visible cyan grid
+    pattern:'linear-gradient(rgba(6,182,212,0.08) 1px,transparent 1px),linear-gradient(90deg,rgba(6,182,212,0.08) 1px,transparent 1px)',
+    patternSize:'44px 44px',
+    overlay:'repeating-linear-gradient(transparent 0px,transparent 3px,rgba(0,0,0,0.07) 3px,rgba(0,0,0,0.07) 4px)',
+    extraCSS:`.card{border-radius:6px!important;border-color:rgba(6,182,212,0.25)!important;box-shadow:0 0 14px rgba(6,182,212,0.1),0 0 1px rgba(6,182,212,0.6),inset 0 0 20px rgba(6,182,212,0.02)!important;}
+      .card:hover{box-shadow:0 0 24px rgba(6,182,212,0.2),0 0 2px rgba(6,182,212,0.8)!important;border-color:rgba(6,182,212,0.5)!important;}
+      .btn-amber{box-shadow:0 0 12px rgba(6,182,212,0.4)!important;}
+      .nav-link.active{box-shadow:inset 0 0 8px rgba(6,182,212,0.1)!important;}` },
+
+  vinyl:    { name:'Vinyl', visual:true,
+    swatchBg:'radial-gradient(circle at 50% 50%,#d97706 0%,#7c3700 55%,#3d1c00 100%)',
+    swatch:'#d97706',
+    r:217,g:119,b:6, accent:'#d97706',hover:'#b45309',text:'#fbbf24',light:'#fde68a',
+    bodyBg:'#0f0a00',
+    cardBg:'rgba(22,15,0,0.88)',
+    cardBorder:'rgba(217,119,6,0.2)',inputBg:'rgba(26,18,0,0.95)',
+    sidebarFrom:'rgba(14,10,0,0.98)',sidebarTo:'rgba(8,6,0,0.98)',
+    font:'"Georgia",serif',
+    // Vinyl groove concentric rings
+    pattern:'repeating-radial-gradient(circle at 50% -20%,transparent 0px,transparent 18px,rgba(217,119,6,0.06) 18px,rgba(217,119,6,0.06) 20px)',
+    extraCSS:`.card{border-radius:8px!important;border-color:rgba(217,119,6,0.22)!important;box-shadow:inset 0 1px 0 rgba(217,119,6,0.15),0 4px 20px rgba(0,0,0,0.5)!important;}
+      .card:hover{border-color:rgba(217,119,6,0.45)!important;box-shadow:inset 0 1px 0 rgba(217,119,6,0.3),0 4px 24px rgba(0,0,0,0.6)!important;}` },
+
+  midnight: { name:'Midnight', visual:true,
+    swatchBg:'#000', swatch:'#1f1f1f',
+    r:180,g:180,b:180, accent:'#e0e0e0',hover:'#b0b0b0',text:'#ffffff',light:'#cccccc',
+    bodyBg:'#000000',
+    cardBg:'rgba(10,10,10,0.95)',
+    cardBorder:'rgba(255,255,255,0.07)',inputBg:'rgba(16,16,16,0.98)',
+    sidebarFrom:'rgba(5,5,5,0.99)',sidebarTo:'rgba(0,0,0,0.99)',
+    cardRadius:'20px',
+    extraCSS:`.card{border-radius:20px!important;border-color:rgba(255,255,255,0.06)!important;box-shadow:0 2px 40px rgba(0,0,0,0.8)!important;}
+      .card:hover{border-color:rgba(255,255,255,0.15)!important;box-shadow:0 2px 40px rgba(0,0,0,0.8),0 0 0 1px rgba(255,255,255,0.1)!important;}` },
+
+  paper:    { name:'Paper', visual:true,
+    swatchBg:'#f0ebe1', swatch:'#e0d9cd',
+    r:28,g:28,b:28, accent:'#1c1c1c',hover:'#333333',text:'#1c1c1c',light:'#444444',
+    bodyBg:'#f0ebe1',cardBg:'#ffffff',cardBorder:'#d1d5db',inputBg:'#f3f3f0',
+    sidebarFrom:'#e8e3d9',sidebarTo:'#ddd8ce',
+    lightMode:true,
+    // Ruled paper lines
+    pattern:'repeating-linear-gradient(transparent 0px,transparent 27px,rgba(180,180,220,0.35) 27px,rgba(180,180,220,0.35) 28px)',
+    extraCSS:`.card{box-shadow:0 2px 8px rgba(0,0,0,0.08),0 0 0 1px rgba(0,0,0,0.06)!important;border-color:#ddd!important;}
+      .card:hover{box-shadow:0 4px 16px rgba(0,0,0,0.12)!important;}
+      #sidebar{border-right:1px solid #d1d5db;}` },
+
+  synthwave:{ name:'Synthwave', visual:true,
+    swatchBg:'linear-gradient(135deg,#0a0014 0%,#6b00a0 50%,#e879f9 100%)',
+    swatch:'#e879f9',
+    r:232,g:121,b:249, accent:'#e879f9',hover:'#d946ef',text:'#f0abfc',light:'#fae8ff',
+    bodyBg:'#0a0014',
+    cardBg:'rgba(16,0,34,0.82)',           // semi-transparent — grid bleeds through
+    cardBorder:'rgba(232,121,249,0.22)',inputBg:'rgba(20,0,40,0.95)',
+    sidebarFrom:'rgba(12,0,24,0.98)',sidebarTo:'rgba(8,0,16,0.98)',
+    // Visible neon grid
+    pattern:'repeating-linear-gradient(90deg,rgba(232,121,249,0.08) 0px,rgba(232,121,249,0.08) 1px,transparent 1px,transparent 56px),repeating-linear-gradient(rgba(232,121,249,0.06) 0px,rgba(232,121,249,0.06) 1px,transparent 1px,transparent 56px),linear-gradient(to bottom,transparent 60%,rgba(232,121,249,0.04) 100%)',
+    extraCSS:`.card{border-color:rgba(232,121,249,0.25)!important;box-shadow:0 0 16px rgba(232,121,249,0.1),0 0 1px rgba(232,121,249,0.5),inset 0 0 24px rgba(232,121,249,0.02)!important;}
+      .card:hover{box-shadow:0 0 28px rgba(232,121,249,0.18),0 0 2px rgba(232,121,249,0.7)!important;border-color:rgba(232,121,249,0.5)!important;}
+      .btn-amber{box-shadow:0 0 14px rgba(232,121,249,0.5)!important;}` },
+
+  space:    { name:'Deep Space', visual:true,
+    swatchBg:'radial-gradient(circle at 30% 30%,#1a3a6a 0%,#020208 70%)',
+    swatch:'#0f2044',
+    r:56,g:189,b:248, accent:'#38bdf8',hover:'#0284c7',text:'#7dd3fc',light:'#bae6fd',
+    bodyBg:'#020208',
+    cardBg:'rgba(3,3,14,0.75)',            // semi-transparent — stars show through!
+    cardBorder:'rgba(56,189,248,0.15)',inputBg:'rgba(5,5,18,0.96)',
+    sidebarFrom:'rgba(4,4,16,0.98)',sidebarTo:'rgba(2,2,8,0.98)',
+    // Stars as large scattered radial dots
+    pattern:[
+      'radial-gradient(1.5px 1.5px at 8% 12%,rgba(255,255,255,0.9) 0%,transparent 100%)',
+      'radial-gradient(1px 1px at 22% 45%,rgba(255,255,255,0.7) 0%,transparent 100%)',
+      'radial-gradient(2px 2px at 35% 8%,rgba(255,255,255,0.8) 0%,transparent 100%)',
+      'radial-gradient(1px 1px at 48% 72%,rgba(255,255,255,0.6) 0%,transparent 100%)',
+      'radial-gradient(1.5px 1.5px at 62% 28%,rgba(255,255,255,0.85) 0%,transparent 100%)',
+      'radial-gradient(1px 1px at 74% 55%,rgba(255,255,255,0.7) 0%,transparent 100%)',
+      'radial-gradient(2px 2px at 88% 18%,rgba(255,255,255,0.9) 0%,transparent 100%)',
+      'radial-gradient(1px 1px at 15% 82%,rgba(255,255,255,0.65) 0%,transparent 100%)',
+      'radial-gradient(1.5px 1.5px at 55% 92%,rgba(255,255,255,0.75) 0%,transparent 100%)',
+      'radial-gradient(1px 1px at 92% 68%,rgba(255,255,255,0.8) 0%,transparent 100%)',
+      'radial-gradient(1px 1px at 30% 30%,rgba(200,230,255,0.6) 0%,transparent 100%)',
+      'radial-gradient(1.5px 1.5px at 78% 85%,rgba(200,220,255,0.7) 0%,transparent 100%)',
+      'radial-gradient(1px 1px at 5% 60%,rgba(255,255,255,0.5) 0%,transparent 100%)',
+      'radial-gradient(1px 1px at 42% 18%,rgba(255,240,200,0.7) 0%,transparent 100%)',
+      'radial-gradient(2px 2px at 68% 48%,rgba(255,255,255,0.85) 0%,transparent 100%)',
+    ].join(','),
+    extraCSS:`.card{border-color:rgba(56,189,248,0.15)!important;box-shadow:0 0 20px rgba(56,189,248,0.06),0 0 1px rgba(56,189,248,0.3),inset 0 0 30px rgba(56,189,248,0.01)!important;backdrop-filter:blur(2px);}
+      .card:hover{border-color:rgba(56,189,248,0.35)!important;box-shadow:0 0 30px rgba(56,189,248,0.12),0 0 2px rgba(56,189,248,0.5)!important;}` },
+
+  // ── Color Accents ────────────────────────────────────────────────────────────
   purple:  { name:'Purple',  swatch:'#9333ea', r:147, g:51,  b:234, accent:'#9333ea', hover:'#7c3aed', text:'#c084fc', light:'#e9d5ff' },
   blue:    { name:'Blue',    swatch:'#2563eb', r:37,  g:99,  b:235, accent:'#2563eb', hover:'#1d4ed8', text:'#60a5fa', light:'#bfdbfe' },
   rose:    { name:'Rose',    swatch:'#e11d48', r:225, g:29,  b:72,  accent:'#e11d48', hover:'#be123c', text:'#fb7185', light:'#fecdd3' },
@@ -3964,6 +4438,8 @@ function applyTheme(name) {
   const t = THEMES[name] || THEMES.purple;
   localStorage.setItem('vds_theme', name);
   const root = document.documentElement;
+
+  // Accent colors
   root.style.setProperty('--a',  t.accent);
   root.style.setProperty('--ah', t.hover);
   root.style.setProperty('--at', t.text);
@@ -3972,27 +4448,94 @@ function applyTheme(name) {
   root.style.setProperty('--ag', t.g);
   root.style.setProperty('--ab', t.b);
 
-  // Override Tailwind purple classes with the new accent
+  // Background / structural colors
+  root.style.setProperty('--body-bg',      t.bodyBg      || '#09080f');
+  root.style.setProperty('--card-bg',      t.cardBg      || '#100d1e');
+  root.style.setProperty('--card-border',  t.cardBorder  || '#1e1535');
+  root.style.setProperty('--input-bg',     t.inputBg     || '#1a1232');
+  root.style.setProperty('--sidebar-from', t.sidebarFrom || '#0f0b1e');
+  root.style.setProperty('--sidebar-to',   t.sidebarTo   || '#0a0815');
+  root.style.setProperty('--card-radius',  t.cardRadius  || '16px');
+  root.style.setProperty('--ui-radius',    t.uiRadius    || '10px');
+  root.style.setProperty('--card-glow',    'none');
+
+  // Body background pattern / texture
+  if (t.pattern) {
+    document.body.style.backgroundImage = t.pattern;
+    document.body.style.backgroundSize  = t.patternSize || 'auto';
+  } else {
+    document.body.style.backgroundImage = '';
+    document.body.style.backgroundSize  = '';
+  }
+
+  // Scan line / grain overlay
+  const overlay = document.getElementById('theme-overlay');
+  if (overlay) {
+    if (t.overlay) {
+      overlay.style.display = 'block';
+      overlay.style.background = t.overlay;
+    } else {
+      overlay.style.display = 'none';
+      overlay.style.background = '';
+    }
+  }
+
+  // Font override
+  document.body.style.fontFamily = t.font || 'system-ui,sans-serif';
+
+  // Light mode class
+  document.body.classList.toggle('theme-light', !!t.lightMode);
+
+  // Tailwind / global CSS overrides
   const o = `rgb(${t.r},${t.g},${t.b})`;
+  const lightCSS = t.lightMode ? `
+    body{color:#111!important;}
+    .text-white,.text-gray-100,.text-gray-200{color:#111!important;}
+    .text-gray-300,.text-gray-400{color:#555!important;}
+    .text-gray-500{color:#666!important;}
+    .text-gray-600{color:#888!important;}
+    .nav-link{color:#555!important;}
+    .nav-link.active{color:#111!important;}
+    .btn-gray{color:#333!important;}
+    .input{color:#111!important;}
+    .input::placeholder{color:#aaa!important;}
+    #card-menu{background:#fff!important;border-color:#d1d5db!important;}
+    #card-menu button,#card-menu div{color:#111!important;}
+    #sidebar{border-right:1px solid #d1d5db;}
+    .text-amber-400,.text-amber-300{color:#b45309!important;}
+    .text-purple-300,.text-purple-400{color:#5b21b6!important;}
+  ` : '';
+
   document.getElementById('theme-tw').textContent = `
-    [class*="bg-purple-6"],[class*="bg-purple-5"]:not([class*="bg-purple-9"]) { background-color:${o} !important; }
-    [class*="text-purple-4"] { color:${t.text} !important; }
-    [class*="text-purple-3"] { color:${t.light} !important; }
-    [class*="text-purple-5"] { color:${t.accent} !important; }
-    [class*="border-purple-5"] { border-color:rgba(${t.r},${t.g},${t.b},.35) !important; }
-    [class*="border-purple-8"],[class*="border-purple-9"] { border-color:rgba(${t.r},${t.g},${t.b},.15) !important; }
-    [class*="from-purple"] { --tw-gradient-from:rgba(${t.r},${t.g},${t.b},.6) !important; }
-    .genre-pill { background:rgba(${t.r},${t.g},${t.b},.2); color:${t.text}; }
-    .theme-accent-fill { fill:${t.accent} !important; }
+    [class*="bg-purple-6"],[class*="bg-purple-5"]:not([class*="bg-purple-9"]){background-color:${o}!important;}
+    [class*="text-purple-4"]{color:${t.text}!important;}
+    [class*="text-purple-3"]{color:${t.light}!important;}
+    [class*="text-purple-5"]{color:${t.accent}!important;}
+    [class*="border-purple-5"]{border-color:rgba(${t.r},${t.g},${t.b},.35)!important;}
+    [class*="border-purple-8"],[class*="border-purple-9"]{border-color:rgba(${t.r},${t.g},${t.b},.15)!important;}
+    [class*="from-purple"]{--tw-gradient-from:rgba(${t.r},${t.g},${t.b},.6)!important;}
+    .genre-pill{background:rgba(${t.r},${t.g},${t.b},.2);color:${t.text};}
+    .theme-accent-fill{fill:${t.accent}!important;}
+    ${lightCSS}
+    ${t.extraCSS || ''}
   `;
 
   // Update active swatch indicator
   document.querySelectorAll('.theme-swatch').forEach(b => {
     b.classList.toggle('active', b.dataset.theme === name);
   });
-  // Update sidebar dot
   const dot = document.getElementById('theme-active-swatch');
-  if (dot) dot.style.background = t.accent;
+  if (dot) dot.style.background = t.swatchBg || t.accent;
+
+  // Refresh right panel decoration when theme changes
+  const decoEl = document.getElementById('rp-deco');
+  if (decoEl) {
+    decoEl.innerHTML = THEME_DECOS[name] || THEME_DECOS._default;
+    const paperTitle = decoEl.querySelector('#rp-paper-title');
+    if (paperTitle && window._dailyAlbum) paperTitle.textContent = cleanTitle(window._dailyAlbum.title || '');
+  }
+  const rpPanel = document.getElementById('right-panel');
+  if (rpPanel) rpPanel.style.background = `linear-gradient(180deg,${t.sidebarFrom||'#0f0b1e'},${t.sidebarTo||'#0a0815'})`;
 }
 
 function initThemeSwatches() {
@@ -4003,9 +4546,16 @@ function openSettings() {
   // Populate theme swatches
   const container = document.getElementById('settings-theme-swatches');
   if (container) {
-    container.innerHTML = Object.entries(THEMES).map(([k,t]) =>
-      `<button class="theme-swatch${(localStorage.getItem('vds_theme')||'purple')===k?' active':''}" data-theme="${k}" style="background:${t.swatch}" title="${t.name}" onclick="applyTheme('${k}')"></button>`
-    ).join('');
+    const cur = localStorage.getItem('vds_theme') || 'purple';
+    const swatch = ([k,t]) =>
+      `<button class="theme-swatch${cur===k?' active':''}" data-theme="${k}" style="background:${t.swatchBg||t.swatch}" title="${t.name}" onclick="applyTheme('${k}')"></button>`;
+    const visual = Object.entries(THEMES).filter(([,t]) => t.visual);
+    const color  = Object.entries(THEMES).filter(([,t]) => !t.visual);
+    container.innerHTML = `
+      <p class="text-xs text-gray-600 w-full mb-1 mt-0">Visual</p>
+      <div class="flex gap-2 flex-wrap mb-3">${visual.map(swatch).join('')}</div>
+      <p class="text-xs text-gray-600 w-full mb-1">Color</p>
+      <div class="flex gap-2 flex-wrap">${color.map(swatch).join('')}</div>`;
   }
   // Populate listening goal
   const goal = getListeningGoal();
