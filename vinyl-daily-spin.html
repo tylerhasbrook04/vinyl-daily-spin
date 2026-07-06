@@ -101,6 +101,20 @@ tailwind.config = {
   </div>
 </div>
 
+<!-- 1001 ALBUMS IMPORT MODAL -->
+<div id="import-1001-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" style="background:rgba(0,0,0,0.85)">
+  <div class="card w-full max-w-sm text-center" onclick="event.stopPropagation()">
+    <div class="text-3xl mb-3">📥</div>
+    <h2 class="text-lg font-bold text-white mb-1">Importing from 1001 Albums</h2>
+    <p id="import-1001-status" class="text-sm text-gray-400 mb-4">Fetching your history…</p>
+    <div class="w-full rounded-full overflow-hidden mb-4" style="height:6px;background:rgba(255,255,255,0.08)">
+      <div id="import-1001-bar" style="height:6px;width:0%;background:var(--a);border-radius:999px;transition:width 0.3s ease"></div>
+    </div>
+    <p id="import-1001-count" class="text-xs text-gray-500"></p>
+    <button id="import-1001-close" class="hidden btn-amber mt-5 w-full" onclick="document.getElementById('import-1001-modal').classList.add('hidden');render()">Done</button>
+  </div>
+</div>
+
 <!-- SETTINGS MODAL -->
 <div id="settings-modal" class="hidden fixed inset-0 z-50 flex items-end justify-center md:items-center p-4" style="background:rgba(0,0,0,0.75)" onclick="closeSettings()">
   <div class="card w-full max-w-sm overflow-y-auto" style="max-height:90vh" onclick="event.stopPropagation()">
@@ -132,8 +146,17 @@ tailwind.config = {
     <!-- Account -->
     <div>
       <p class="text-xs font-semibold uppercase tracking-widest text-gray-500 mb-3">Account</p>
-      <button onclick="closeSettings();navigate('add')" class="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-300 hover:bg-white/5 transition-colors mb-1">📋 Change Spreadsheet ID</button>
-      <button onclick="closeSettings();S.token=null;render()" class="w-full text-left px-3 py-2 rounded-lg text-sm text-red-400 hover:bg-white/5 transition-colors">🚪 Sign Out</button>
+      <button onclick="closeSettings();signOutUser()" class="w-full text-left px-3 py-2 rounded-lg text-sm text-red-400 hover:bg-white/5 transition-colors">🚪 Sign Out</button>
+    </div>
+
+    <div style="border-top:1px solid rgba(255,255,255,0.06)" class="my-4"></div>
+
+    <!-- Import -->
+    <div>
+      <p class="text-xs font-semibold uppercase tracking-widest text-gray-500 mb-1">Import</p>
+      <p class="text-xs text-gray-600 mb-3">Pull your rated albums from 1001 Albums Generator into your Library.</p>
+      <button onclick="closeSettings();import1001Albums()" class="w-full text-left px-3 py-2 rounded-lg text-sm text-purple-300 hover:bg-white/5 transition-colors">📥 Import from 1001 Albums Generator</button>
+      <button onclick="closeSettings();deleteUnknownAlbums()" class="w-full text-left px-3 py-2 rounded-lg text-sm text-red-400 hover:bg-white/5 transition-colors">🗑 Delete blank-title rows from Library</button>
     </div>
   </div>
 </div>
@@ -380,8 +403,31 @@ async function sheetsBatchUpdate(data) {
   return r.json();
 }
 
+async function sheetsDeleteRows(sheetTabId, rowIndices) {
+  // rowIndices = 0-based row indices to delete; must be sorted descending to stay valid
+  const sorted = [...rowIndices].sort((a,b) => b - a);
+  const requests = sorted.map(idx => ({
+    deleteDimension: { range: { sheetId: sheetTabId, dimension:'ROWS', startIndex: idx, endIndex: idx + 1 } }
+  }));
+  const r = await _sheetsFetch(`https://sheets.googleapis.com/v4/spreadsheets/${S.sheetId}:batchUpdate`,
+    { method:'POST', headers:{ Authorization:`Bearer ${S.token}`, 'Content-Type':'application/json' },
+      body: JSON.stringify({ requests }) });
+  if (!r.ok) { const t=await r.text(); throw new Error(`Sheets delete error: ${t}`); }
+  return r.json();
+}
+
+async function getSheetTabId(sheetName) {
+  const r = await _sheetsFetch(`https://sheets.googleapis.com/v4/spreadsheets/${S.sheetId}?fields=sheets.properties`,
+    { headers:{ Authorization:`Bearer ${S.token}` } });
+  if (!r.ok) throw new Error('Could not fetch sheet metadata');
+  const meta = await r.json();
+  const sheet = (meta.sheets||[]).find(s => s.properties.title === sheetName);
+  if (!sheet) throw new Error(`Sheet "${sheetName}" not found`);
+  return sheet.properties.sheetId;
+}
+
 async function sheetsAppend(range, values) {
-  const r = await _sheetsFetch(`https://sheets.googleapis.com/v4/spreadsheets/${S.sheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED`,
+  const r = await _sheetsFetch(`https://sheets.googleapis.com/v4/spreadsheets/${S.sheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=RAW`,
     { method:'POST', headers:{ Authorization:`Bearer ${S.token}`, 'Content-Type':'application/json' },
       body: JSON.stringify({ values }) });
   if (!r.ok) { const t=await r.text(); throw new Error(`Sheets append error: ${t}`); }
@@ -407,100 +453,109 @@ const COL_ALIASES = {
 function canonicalHeader(h) { return COL_ALIASES[h] || h; }
 
 async function getAllAlbums() {
-  const rows = await sheetsGet('Ranked albums!A:Z');
-  if (rows.length < 2) return [];
-  const headers = rows[0];
-  const artColIdx = 9; // Column J (hardcoded)
-  return rows.slice(1).map((row, idx) => {
-    const obj = { rowIndex: idx+2 };
-    // Trim every cell on the way in. Without this, a stray trailing/leading space in a sheet
-    // cell (very easy to pick up from copy/paste) makes this row's obj.Artist/obj.AlbumTitle
-    // differ — by whitespace alone — from the value every other render/lookup site uses to build
-    // its art-cache key (they all read obj.Artist/obj.AlbumTitle raw). That silent mismatch is
-    // what was causing already-saved cover art to never display: the cache key built here
-    // wouldn't match the cache key built when the card renders, so it permanently fell back to
-    // "no art" for that row. Trimming once at the source keeps every downstream key consistent.
-    headers.forEach((h,i) => { const canon=canonicalHeader(h); const val=(row[i]||'').trim(); if(!obj[canon] && val) obj[canon]=val; });
-    // Seed art cache from sheet column if present and not already cached
-    if (artColIdx >= 0) {
-      const artUrl = row[artColIdx] || '';
-      obj._artUrl = artUrl; // raw column J value — used by quick-fetch mode to skip albums that already have art
-      // Use the exact same title-cleaning (cleanTitle strips ALL asterisks, not just a trailing
-      // one) that every render site uses when building its own cache key, so this seed key always
-      // matches.
-      const title = cleanTitle(obj.AlbumTitle);
-      const artist = (obj.Artist||'').trim();
-      if (artUrl && title && artist) {
-        const key = `${title}|${artist}`;
-        // Sheet value takes priority — always overwrite so bad cached URLs get replaced.
-        // Upgrade any stored iTunes 100×100 thumbnails to 600×600 in memory.
-        _artCache[key] = _itunesHiRes(artUrl); persistArtUrl(key, _itunesHiRes(artUrl));
-      }
-    }
-    return obj;
-  });
+  return db_getLibrary();
 }
 
 async function getDailyAlbum() {
-  const rows = await sheetsGet('Ranked albums!A:Z');
-  if (rows.length < 2) return { error:'No albums found in sheet' };
-  const headers = rows[0];
-  const canonHeaders = headers.map(canonicalHeader);
-  const gc = (n) => canonHeaders.indexOf(n);
-  const statusCol=gc('Status'), albumIdCol=gc('AlbumID'), titleCol=gc('AlbumTitle'),
-        artistCol=gc('Artist'), yearCol=gc('Year'), genreCol=gc('Genre'),
-        topSongsCol=gc('TopSongs'), albumLinkCol=gc('AlbumLink'), dateCol=gc('DateAssigned');
-  const todayStr = today();
-
-  const todayRow = rows.slice(1).reduce((found,row,idx) => {
-    if (found) return found;
-    if ((row[dateCol]||'').trim() === todayStr) return { row, rowIndex: idx+2 };
-    return null;
-  }, null);
-
-  if (todayRow) {
-    const {row,rowIndex} = todayRow;
-    return { album:{ date:todayStr, album_id:row[albumIdCol]||`row-${rowIndex}`, album_title:row[titleCol]||'Unknown', artist:row[artistCol]||'Unknown', year:row[yearCol]||'', genre:row[genreCol]||'', top_songs:row[topSongsCol]||'', album_link:row[albumLinkCol]||'', row_index:rowIndex, status:row[statusCol]||'' }, alreadyAssigned:true };
-  }
-
-  const candidates = rows.slice(1).map((row,idx)=>({row,rowIndex:idx+2})).filter(({row})=>(row[statusCol]||'').trim()==='Not Picked');
-  if (!candidates.length) return { noCandidates:true };
-
-  const {row,rowIndex} = candidates[Math.floor(Math.random()*candidates.length)];
-  const updates = [];
-  if (statusCol>=0) updates.push({ range:`Ranked albums!${colLetter(statusCol)}${rowIndex}`, values:[['Assigned']] });
-  if (dateCol>=0) updates.push({ range:`Ranked albums!${colLetter(dateCol)}${rowIndex}`, values:[[todayStr]] });
-  if (updates.length) await sheetsBatchUpdate(updates);
-
-  return { album:{ date:todayStr, album_id:row[albumIdCol]||`row-${rowIndex}`, album_title:row[titleCol]||'Unknown', artist:row[artistCol]||'Unknown', year:row[yearCol]||'', genre:row[genreCol]||'', top_songs:row[topSongsCol]||'', album_link:row[albumLinkCol]||'', row_index:rowIndex, status:'Assigned' } };
+  return db_getDailyAlbum();
 }
 
-async function updateAlbum(rowIndex, fields) {
-  const rows = await sheetsGet('Ranked albums!A1:Z1');
-  const headers = (rows[0]||[]);
-  const updates = Object.entries(fields).map(([k,v]) => {
-    // Canonical match first (same precedence getAllAlbums() uses for reads) so this always
-    // writes to the same column the rest of the app reads from, even if a sheet happens to have
-    // a stray duplicate/alias header further down the row. Falls back to a literal header-text
-    // match only if nothing canonicalizes to this field name.
-    let idx = headers.findIndex(h => canonicalHeader(h) === k);
-    if (idx<0) idx = headers.indexOf(k);
-    if (idx<0) return null;
-    return { range:`Ranked albums!${colLetter(idx)}${rowIndex}`, values:[[v]] };
-  }).filter(Boolean);
-  if (updates.length) await sheetsBatchUpdate(updates);
+async function updateAlbum(fbKey, fields) {
+  return db_updateAlbum(fbKey, fields);
+}
+
+async function deleteUnknownAlbums() {
+  try {
+    const rows = await sheetsGet('Ranked albums!A:Z');
+    if (rows.length < 2) { alert('No data found.'); return; }
+    const headers = rows[0];
+    const titleIdx = headers.findIndex(h => canonicalHeader(h) === 'AlbumTitle');
+    if (titleIdx < 0) { alert('Could not find AlbumTitle column.'); return; }
+    const badRows = [];
+    rows.slice(1).forEach((row, i) => {
+      const title = (row[titleIdx] || '').trim();
+      if (!title || title.toLowerCase() === 'unknown album') badRows.push(i + 1);
+    });
+    if (!badRows.length) { alert('No unknown albums found — nothing to delete!'); return; }
+    const tabId = await getSheetTabId('Ranked albums');
+    await sheetsDeleteRows(tabId, badRows);
+    alert(`✅ Deleted ${badRows.length} unknown album row${badRows.length !== 1 ? 's' : ''}.`);
+    render();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function import1001Albums() {
+  const modal = document.getElementById('import-1001-modal');
+  const statusEl = document.getElementById('import-1001-status');
+  const barEl = document.getElementById('import-1001-bar');
+  const countEl = document.getElementById('import-1001-count');
+  const closeBtn = document.getElementById('import-1001-close');
+  modal.classList.remove('hidden');
+  closeBtn.classList.add('hidden');
+
+  const setStatus = (msg, pct, sub) => {
+    statusEl.textContent = msg;
+    barEl.style.width = pct + '%';
+    if (sub !== undefined) countEl.textContent = sub;
+  };
+
+  try {
+    setStatus('Fetching your 1001 Albums history…', 10, '');
+    const resp = await fetch('https://1001albumsgenerator.com/api/v1/projects/tylers-album-run');
+    if (!resp.ok) throw new Error('Could not reach 1001albumsgenerator.com');
+    const data = await resp.json();
+    // Only valid entries: numeric rating AND album name present
+    const history = (data.history || []).filter(h =>
+      typeof h.rating === 'number' && h.album?.name && h.album?.artist
+    );
+
+    setStatus('Loading your existing library…', 25, `${history.length} valid rated albums found`);
+    const existing = await getAllAlbums();
+    const existingKeys = new Set(existing.map(a => `${(a.AlbumTitle||'').toLowerCase().trim()}|${(a.Artist||'').toLowerCase().trim()}`));
+
+    // Filter to new albums only
+    const toImport = history.filter(h => {
+      const key = `${h.album.name.toLowerCase().trim()}|${h.album.artist.toLowerCase().trim()}`;
+      return !existingKeys.has(key);
+    });
+
+    setStatus(`Importing ${toImport.length} new albums…`, 35, `${history.length - toImport.length} already in your library`);
+
+    let imported = 0, failed = 0;
+    for (let i = 0; i < toImport.length; i++) {
+      const h = toImport[i];
+      const rating = Math.round(Number(h.rating)) * 2; // 1-5 → 2-10
+      const dateStr = h.generatedAt ? h.generatedAt.slice(0, 10) : '';
+
+      try {
+        await db_addAlbum({
+          AlbumTitle:   h.album.name,
+          Artist:       h.album.artist,
+          Rating:       String(rating),
+          DateAssigned: dateStr,
+          Status:       'Completed',
+          PickedByMe:   'TRUE',
+          Review:       h.review || '',
+          Genre:        h.album.genres?.[0] || '',
+          Year:         h.album.releaseDate ? String(h.album.releaseDate).slice(0,4) : '',
+        });
+        imported++;
+      } catch(e) { failed++; }
+
+      const pct = 35 + Math.round((i + 1) / toImport.length * 60);
+      setStatus(`Importing… ${i + 1} of ${toImport.length}`, pct, failed ? `${imported} added, ${failed} failed` : `${imported} added`);
+      if (i % 10 === 9) await new Promise(r => setTimeout(r, 100));
+    }
+
+    setStatus(`✅ Import complete!`, 100, `${imported} albums added${failed ? `, ${failed} failed` : ''}${toImport.length === 0 ? ' — all albums already in your library' : ''}`);
+  } catch(e) {
+    setStatus('❌ Import failed: ' + e.message, 0, '');
+  }
+  closeBtn.classList.remove('hidden');
 }
 
 async function addAlbum(album) {
-  const rows = await sheetsGet('Ranked albums!A1:Z1');
-  const headers = (rows[0]||[]);
-  const rowData = headers.map(h => {
-    const canonical = canonicalHeader(h);
-    if (canonical==='Status') return 'Not Picked';
-    if (canonical==='PickedByMe') return 'TRUE';
-    return album[canonical]!==undefined ? String(album[canonical]) : '';
-  });
-  await sheetsAppend('Ranked albums!A:Z', [rowData]);
+  return db_addAlbum(album);
 }
 
 async function setupSheet() {
@@ -541,31 +596,15 @@ async function setupSheet() {
 
 // ─── ALBUMLIST API ───────────────────────────────────────────────────────────
 async function getAlbumList() {
-  const rows = await sheetsGet('AlbumList!A:C');
-  const qDates = (() => { try { return JSON.parse(localStorage.getItem('vds_queue_dates')||'{}'); } catch(e) { return {}; } })();
-  // row 1 is empty, data starts at row 2
-  return rows.slice(1).map((row, idx) => ({
-    title: (row[0]||'').trim(),
-    artist: (row[1]||'').trim(),
-    artUrl: (row[2]||'').trim(),
-    rowIndex: idx + 2,
-  })).filter(a => a.title).map(a => {
-    // Pre-cache any stored art URLs so fetchAlbumArt returns them instantly
-    if (a.artUrl) _artCache[`${a.title}|${a.artist}`] = _itunesHiRes(a.artUrl);
-    a.dateAdded = qDates[`${a.title}|${a.artist}`] || null;
-    return a;
-  });
+  return db_getQueue();
 }
 
 async function addToAlbumList(title, artist, artUrl='') {
-  await sheetsAppend('AlbumList!A:C', [[title, artist, artUrl]]);
+  return db_addToQueue(title, artist, artUrl);
 }
 
-async function saveAlbumArtUrl(rowIndex, artUrl) {
-  await sheetsBatchUpdate([{
-    range: `AlbumList!C${rowIndex}`,
-    values: [[artUrl]]
-  }]);
+async function saveAlbumArtUrl(fbKey, artUrl) {
+  return db_updateQueueArt(fbKey, artUrl);
 }
 
 function _applyArtUrl(title, artist, url) {
@@ -616,6 +655,14 @@ function showCardMenu(btn, type, title, artist, rowIndex, hasRelisten) {
     html += sep;
   }
   if (type === 'queue') {
+    const qDates = (() => { try { return JSON.parse(localStorage.getItem('vds_queue_dates')||'{}'); } catch(e) { return {}; } })();
+    const dateAdded = qDates[`${title}|${artist}`];
+    if (dateAdded) {
+      const daysAgo = Math.floor((new Date(today()) - new Date(dateAdded)) / 86400000);
+      const label = daysAgo === 0 ? 'Added today' : daysAgo === 1 ? 'Added yesterday' : `Added ${daysAgo}d ago`;
+      html += `<div class="px-3 py-2 text-xs" style="color:#6b7280">${label} · ${fmt_date(dateAdded)}</div>`;
+      html += sep;
+    }
     html += `<button class="${btnClass}" style="color:#e5e7eb" onclick="event.stopPropagation();hideCardMenu();menuEditQueue()">✏️ Edit details</button>`;
     html += sep;
   }
@@ -662,24 +709,20 @@ function menuSetArt() {
 function menuClearArt() {
   if (!_cardMenuCtx) return;
   _applyArtUrl(_cardMenuCtx.title, _cardMenuCtx.artist, '');
-  if (_cardMenuCtx.type === 'queue') saveAlbumArtUrl(_cardMenuCtx.rowIndex, '').catch(()=>{});
-  else updateAlbum(_cardMenuCtx.rowIndex, { ArtUrl: '' }).catch(()=>{});
+  if (_cardMenuCtx.type === 'queue') db_updateQueueArt(_cardMenuCtx.rowIndex, '').catch(()=>{});
+  else db_updateAlbum(_cardMenuCtx.rowIndex, { ArtUrl: '' }).catch(()=>{});
 }
 async function menuToggleRelisten() {
   if (!_cardMenuCtx) return;
   const { title, artist, rowIndex, hasRelisten } = _cardMenuCtx;
   const albums = window._libraryAlbums || [];
   const album = albums.find(a => cleanTitle(a.AlbumTitle) === title && (a.Artist||'') === artist);
-  const ri = rowIndex || album?.rowIndex;
-  if (!ri) { alert('Could not find album row'); return; }
+  const fbKey = rowIndex || album?._fbKey;
+  if (!fbKey) { alert('Could not find album'); return; }
   const currentRaw = album?.AlbumTitle || title;
   const newTitle = hasRelisten ? currentRaw.replace(/\*/g,'').trim() : currentRaw.trim() + '*';
   try {
-    const rows = await sheetsGet('Ranked albums!A1:Z1');
-    const headers = rows[0] || [];
-    const titleColIdx = headers.findIndex(h => canonicalHeader(h) === 'AlbumTitle');
-    if (titleColIdx < 0) { alert('Could not find title column in sheet'); return; }
-    await sheetsBatchUpdate([{ range:`Ranked albums!${colLetter(titleColIdx)}${ri}`, values:[[newTitle]] }]);
+    await db_updateAlbum(fbKey, { AlbumTitle: newTitle });
     if (album) album.AlbumTitle = newTitle;
     if (S.route === 'library') filterLibrary();
     else render();
@@ -687,13 +730,10 @@ async function menuToggleRelisten() {
 }
 async function menuDeleteQueue() {
   if (!_cardMenuCtx || !_cardMenuCtx.rowIndex) return;
-  const { title, rowIndex, card } = _cardMenuCtx;
+  const { title, rowIndex, artist, card } = _cardMenuCtx;
   if (!confirm(`Remove "${title}" from your queue?`)) return;
   try {
-    await sheetsBatchUpdate([{
-      range: `AlbumList!A${rowIndex}:C${rowIndex}`,
-      values: [['', '', '']]
-    }]);
+    await db_removeFromQueue(rowIndex, title, artist);
     delete _artCache[`${_cardMenuCtx.title}|${_cardMenuCtx.artist}`];
     try { const qd=JSON.parse(localStorage.getItem('vds_queue_dates')||'{}'); delete qd[`${_cardMenuCtx.title}|${_cardMenuCtx.artist}`]; localStorage.setItem('vds_queue_dates',JSON.stringify(qd)); } catch(e) {}
     _cardMenuCtx = null;
@@ -745,10 +785,7 @@ async function saveQueueEdit() {
   status.textContent = 'Saving…'; status.className = 'text-xs text-center text-gray-400';
   status.classList.remove('hidden');
   try {
-    await sheetsBatchUpdate([
-      { range: `AlbumList!A${ctx.rowIndex}`, values: [[newTitle]] },
-      { range: `AlbumList!B${ctx.rowIndex}`, values: [[newArtist]] },
-    ]);
+    await _firebaseDB.ref(`users/${_currentUser.uid}/queue/${ctx.rowIndex}`).update({ title: newTitle, artist: newArtist });
     // Update art cache key if title/artist changed
     const oldKey = `${ctx.oldTitle}|${ctx.oldArtist}`;
     const newKey = `${newTitle}|${newArtist}`;
@@ -840,51 +877,11 @@ async function saveEditAlbum() {
   };
   const newRating = Number(vals.Rating) || 0;
   try {
-    const rows = await sheetsGet('Ranked albums!A1:Z1');
-    const headers = rows[0] || [];
-    const updates = Object.entries(vals).map(([key, val]) => {
-      const idx = headers.findIndex(h => canonicalHeader(h) === key);
-      if (idx < 0) return null;
-      return { range:`Ranked albums!${colLetter(idx)}${a.rowIndex}`, values:[[val]] };
-    }).filter(Boolean);
-    await sheetsBatchUpdate(updates);
-    // Patch in-memory
+    await db_updateAlbum(a._fbKey || a.rowIndex, vals);
+    // Patch in-memory so the card updates immediately
     const albums = window._libraryAlbums || [];
-    const found = albums.find(al => al.rowIndex === a.rowIndex);
+    const found = albums.find(al => al._fbKey === (a._fbKey || a.rowIndex));
     if (found) Object.assign(found, vals);
-
-    // If rating changed, reposition the album within the new rating group
-    if (newRating && oldRating && newRating !== oldRating) {
-      const peers = albums.filter(al => Number(al.Rating) === newRating && al.rowIndex !== a.rowIndex);
-      let targetRowIndex = null;
-      if (peers.length) {
-        if (newRating < oldRating) {
-          // Downgraded → top of new rating group (best-ranked among peers)
-          targetRowIndex = Math.min(...peers.map(al => al.rowIndex));
-        } else {
-          // Upgraded → bottom of new rating group (worst-ranked among peers) + 1
-          targetRowIndex = Math.max(...peers.map(al => al.rowIndex)) + 1;
-        }
-      }
-      if (targetRowIndex !== null && targetRowIndex !== a.rowIndex) {
-        status.textContent = 'Repositioning…';
-        await moveSheetRowTo('Ranked albums', a.rowIndex, targetRowIndex);
-        // Update in-memory rowIndex values for all affected albums
-        const movingDown = targetRowIndex > a.rowIndex;
-        const oldIdx = a.rowIndex;
-        albums.forEach(al => {
-          if (al.rowIndex === oldIdx) {
-            al.rowIndex = movingDown ? targetRowIndex - 1 : targetRowIndex;
-          } else if (movingDown && al.rowIndex > oldIdx && al.rowIndex < targetRowIndex) {
-            al.rowIndex--;
-          } else if (!movingDown && al.rowIndex >= targetRowIndex && al.rowIndex < oldIdx) {
-            al.rowIndex++;
-          }
-        });
-        albums.sort((x, y) => x.rowIndex - y.rowIndex);
-      }
-    }
-
     status.textContent = '✓ Saved!'; status.className = 'text-xs text-center text-green-400';
     setTimeout(() => { closeEditModal(); if (S.route==='library') filterLibrary(); else render(); }, 800);
   } catch(e) { status.textContent = '✗ ' + e.message; status.className = 'text-xs text-center text-red-400'; }
@@ -897,29 +894,26 @@ document.addEventListener('click', hideCardMenu);
 function _openArtSearch(title, artist) {
   window.open(`https://www.google.com/search?tbm=isch&q=${encodeURIComponent(artist + ' ' + title + ' album cover')}`, '_blank');
 }
-async function setQueueArtUrl(rowIndex, title, artist) {
+async function setQueueArtUrl(fbKey, title, artist) {
   const current = _artCache[`${title}|${artist}`] || '';
   if (!current && confirm(`Search Google Images for "${title}" cover art?\n\nClick Cancel if you already have an image URL — you'll paste it on the next screen either way.`)) _openArtSearch(title, artist);
   const url = prompt('Paste a cover image URL (leave blank to clear):\n(Right-click an album cover online → Copy Image Address)', current);
   if (url === null) return;
   const trimmed = url.trim();
   try {
-    await saveAlbumArtUrl(rowIndex, trimmed);
+    await db_updateQueueArt(fbKey, trimmed);
     _applyArtUrl(title, artist, trimmed);
   } catch(e) { alert('Error saving: ' + e.message); }
 }
 
-async function setLibraryArtUrl(rowIndex, title, artist) {
+async function setLibraryArtUrl(fbKey, title, artist) {
   const current = _artCache[`${title}|${artist}`] || '';
   if (!current && confirm(`Search Google Images for "${title}" cover art?\n\nClick Cancel if you already have an image URL — you'll paste it on the next screen either way.`)) _openArtSearch(title, artist);
   const url = prompt('Paste a cover image URL (leave blank to clear):\n(Right-click an album cover online → Copy Image Address)', current);
   if (url === null) return;
   const trimmed = url.trim();
   try {
-    // Persist to the "Ranked albums" sheet (ArtUrl column), not just the in-memory cache —
-    // without this the edit looked like it worked but got silently overwritten by whatever
-    // was still on the sheet the next time art was (re)loaded from it.
-    await updateAlbum(rowIndex, { ArtUrl: trimmed });
+    await db_updateAlbum(fbKey, { ArtUrl: trimmed });
     _applyArtUrl(title, artist, trimmed);
   } catch(e) { alert('Error saving: ' + e.message); }
 }
@@ -1356,6 +1350,29 @@ async function fetchArtFromCoverArtArchive(title, artist) {
   } catch(e) { return null; }
 }
 
+// Save art URLs to Firebase for a batch of library albums.
+// updates: [{fbKey, url}]
+async function fbSaveLibraryArtBatch(updates) {
+  if (!updates.length || !_currentUser || !_firebaseDB) return;
+  const base = `users/${_currentUser.uid}/library`;
+  const writes = {};
+  for (const { fbKey, url } of updates) {
+    if (fbKey && url) writes[`${base}/${fbKey}/artUrl`] = url;
+  }
+  if (Object.keys(writes).length) await _firebaseDB.ref().update(writes);
+}
+
+// Save art URLs to Firebase for a batch of queue albums.
+async function fbSaveQueueArtBatch(updates) {
+  if (!updates.length || !_currentUser || !_firebaseDB) return;
+  const base = `users/${_currentUser.uid}/queue`;
+  const writes = {};
+  for (const { fbKey, url } of updates) {
+    if (fbKey && url) writes[`${base}/${fbKey}/artUrl`] = url;
+  }
+  if (Object.keys(writes).length) await _firebaseDB.ref().update(writes);
+}
+
 // ─── BULK ART FETCHER ────────────────────────────────────────────────────────
 async function bulkFetchArt(quickMode) {
   const modal = document.getElementById('bulk-art-modal');
@@ -1435,7 +1452,7 @@ async function bulkFetchArt(quickMode) {
           const key = `${title}|${artist}`;
           _artCache[key] = url;
           persistArtUrl(key, url);
-          itunesFound.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
+          itunesFound.push({ fbKey: a._fbKey || a.rowIndex, url });
         }
       }
       checked += chunk.length;
@@ -1447,7 +1464,7 @@ async function bulkFetchArt(quickMode) {
     // Save iTunes matches now — they're safe even if a later pass fails.
     if (itunesFound.length) {
       statusEl.textContent = `Saving ${itunesFound.length} iTunes matches…`;
-      await sheetsBatchUpdate(itunesFound);
+      await fbSaveLibraryArtBatch(itunesFound);
       found.push(...itunesFound);
     }
 
@@ -1475,7 +1492,7 @@ async function bulkFetchArt(quickMode) {
             const key = `${title}|${artist}`;
             _artCache[key] = url;
             persistArtUrl(key, url);
-            dFound.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
+            dFound.push({ fbKey: a._fbKey || a.rowIndex, url });
           }
         }
         dchecked += chunk.length;
@@ -1486,7 +1503,7 @@ async function bulkFetchArt(quickMode) {
       // Save Deezer matches now, independent of the iTunes save above.
       if (dFound.length) {
         statusEl.textContent = `Saving ${dFound.length} Deezer matches…`;
-        await sheetsBatchUpdate(dFound);
+        await fbSaveLibraryArtBatch(dFound);
         found.push(...dFound);
       }
     }
@@ -1546,7 +1563,7 @@ async function bulkFetchArt(quickMode) {
                 const key = `${title}|${artist}`;
                 _artCache[key] = url;
                 persistArtUrl(key, url);
-                aFound.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
+                aFound.push({ fbKey: a._fbKey || a.rowIndex, url });
               }
             }
           }
@@ -1556,7 +1573,7 @@ async function bulkFetchArt(quickMode) {
       // Save artist-catalog matches now, independent of the earlier saves.
       if (aFound.length) {
         statusEl.textContent = `Saving ${aFound.length} artist-catalog matches…`;
-        await sheetsBatchUpdate(aFound);
+        await fbSaveLibraryArtBatch(aFound);
         found.push(...aFound);
       }
     }
@@ -1585,7 +1602,7 @@ async function bulkFetchArt(quickMode) {
             const key = `${title}|${artist}`;
             _artCache[key] = url;
             persistArtUrl(key, url);
-            wFound.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
+            wFound.push({ fbKey: a._fbKey || a.rowIndex, url });
           }
         }
         wchecked += chunk.length;
@@ -1594,7 +1611,7 @@ async function bulkFetchArt(quickMode) {
       }
       if (wFound.length) {
         statusEl.textContent = `Saving ${wFound.length} Wikipedia matches…`;
-        await sheetsBatchUpdate(wFound);
+        await fbSaveLibraryArtBatch(wFound);
         found.push(...wFound);
       }
     }
@@ -1623,7 +1640,7 @@ async function bulkFetchArt(quickMode) {
             const key = `${title}|${artist}`;
             _artCache[key] = url;
             persistArtUrl(key, url);
-            cFound.push({ range: `Ranked albums!J${a.rowIndex}`, values: [[url]] });
+            cFound.push({ fbKey: a._fbKey || a.rowIndex, url });
           }
         }
         cchecked += chunk.length;
@@ -1632,7 +1649,7 @@ async function bulkFetchArt(quickMode) {
       }
       if (cFound.length) {
         statusEl.textContent = `Saving ${cFound.length} Cover Art Archive matches…`;
-        await sheetsBatchUpdate(cFound);
+        await fbSaveLibraryArtBatch(cFound);
         found.push(...cFound);
       }
     }
@@ -1714,7 +1731,7 @@ async function bulkFetchQueueArt(quickMode) {
           const key = `${a.title}|${a.artist}`;
           _artCache[key] = url;
           persistArtUrl(key, url);
-          found.push({ range: `AlbumList!C${a.rowIndex}`, values: [[url]] });
+          found.push({ fbKey: a._fbKey || a.rowIndex, url });
         }
       }
       checked += chunk.length;
@@ -1725,7 +1742,7 @@ async function bulkFetchQueueArt(quickMode) {
 
     if (found.length) {
       statusEl.textContent = `Saving ${found.length} iTunes matches…`;
-      await sheetsBatchUpdate(found);
+      await fbSaveQueueArtBatch(found);
     }
 
     // Deezer fallback for anything iTunes missed
@@ -1746,7 +1763,7 @@ async function bulkFetchQueueArt(quickMode) {
             const key = `${a.title}|${a.artist}`;
             _artCache[key] = url;
             persistArtUrl(key, url);
-            dFound.push({ range: `AlbumList!C${a.rowIndex}`, values: [[url]] });
+            dFound.push({ fbKey: a._fbKey || a.rowIndex, url });
           }
         }
         dchecked += chunk.length;
@@ -1756,7 +1773,7 @@ async function bulkFetchQueueArt(quickMode) {
       }
       if (dFound.length) {
         statusEl.textContent = `Saving ${dFound.length} Deezer matches…`;
-        await sheetsBatchUpdate(dFound);
+        await fbSaveQueueArtBatch(dFound);
         found.push(...dFound);
       }
     }
@@ -1779,7 +1796,7 @@ async function bulkFetchQueueArt(quickMode) {
             const key = `${a.title}|${a.artist}`;
             _artCache[key] = url;
             persistArtUrl(key, url);
-            wFound.push({ range: `AlbumList!C${a.rowIndex}`, values: [[url]] });
+            wFound.push({ fbKey: a._fbKey || a.rowIndex, url });
           }
         }
         wchecked += chunk.length;
@@ -1788,7 +1805,7 @@ async function bulkFetchQueueArt(quickMode) {
       }
       if (wFound.length) {
         statusEl.textContent = `Saving ${wFound.length} Wikipedia matches…`;
-        await sheetsBatchUpdate(wFound);
+        await fbSaveQueueArtBatch(wFound);
         found.push(...wFound);
       }
     }
@@ -1811,7 +1828,7 @@ async function bulkFetchQueueArt(quickMode) {
             const key = `${a.title}|${a.artist}`;
             _artCache[key] = url;
             persistArtUrl(key, url);
-            cFound.push({ range: `AlbumList!C${a.rowIndex}`, values: [[url]] });
+            cFound.push({ fbKey: a._fbKey || a.rowIndex, url });
           }
         }
         cchecked += chunk.length;
@@ -1820,7 +1837,7 @@ async function bulkFetchQueueArt(quickMode) {
       }
       if (cFound.length) {
         statusEl.textContent = `Saving ${cFound.length} Cover Art Archive matches…`;
-        await sheetsBatchUpdate(cFound);
+        await fbSaveQueueArtBatch(cFound);
         found.push(...cFound);
       }
     }
@@ -1989,12 +2006,173 @@ function renderNav() {
     </div>`).join('');
 }
 
+// ─── FIRST-RUN / WELCOME SCREEN ──────────────────────────────────────────────
+function renderFirstRun() {
+  const name = (_currentUser.displayName || _currentUser.email || 'there').split(' ')[0];
+  return `<div class="min-h-screen flex items-center justify-center p-6">
+    <div class="card max-w-md w-full flex flex-col items-center gap-6 text-center">
+      <div class="w-16 h-16 rounded-full bg-purple-600/20 border border-purple-500/30 flex items-center justify-center text-3xl">🎵</div>
+      <div>
+        <h1 class="text-2xl font-bold text-white">Welcome, ${name}!</h1>
+        <p class="text-gray-400 text-sm mt-2">Your library is empty. How would you like to get started?</p>
+      </div>
+      <div class="w-full flex flex-col gap-3">
+        <button class="btn-amber w-full flex items-center gap-3 py-4 px-5 text-left rounded-xl" onclick="startFresh()">
+          <span class="text-2xl">✨</span>
+          <div>
+            <div class="font-semibold">Start fresh</div>
+            <div class="text-xs text-amber-200/70 mt-0.5">I'll add albums manually as I listen</div>
+          </div>
+        </button>
+        <button class="w-full flex items-center gap-3 py-4 px-5 text-left rounded-xl border border-gray-700 hover:border-purple-500/40 transition-colors bg-white/3" onclick="showMigrationPanel()">
+          <span class="text-2xl">📊</span>
+          <div>
+            <div class="font-semibold text-white">Import from Google Sheets</div>
+            <div class="text-xs text-gray-500 mt-0.5">For existing Vinyl Daily Spin users with a spreadsheet already set up</div>
+          </div>
+        </button>
+      </div>
+      <div id="migration-panel" class="hidden w-full flex flex-col gap-4 text-left border-t border-gray-800 pt-4">
+        <div class="rounded-lg bg-amber-500/10 border border-amber-500/30 px-4 py-3 flex gap-3">
+          <span class="text-amber-400 text-lg flex-shrink-0">⚠️</span>
+          <p class="text-amber-300 text-xs leading-relaxed"><strong>Before continuing:</strong> make a copy of your Google Sheet first. Go to <strong>File → Make a copy</strong> in Google Sheets. The calibration process may alter your sheet's data — always work from a backup.</p>
+        </div>
+        <p class="text-sm text-gray-400">Enter your OAuth Client ID and Spreadsheet ID from your old setup. We'll calibrate and import your library and queue into Firebase.</p>
+        <div>
+          <label class="text-xs text-gray-500 mb-1 block">OAuth Client ID</label>
+          <input class="input text-sm" id="migrate-client-id" placeholder="xxxxxx.apps.googleusercontent.com" value="${S.clientId||''}"/>
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 mb-1 block">Spreadsheet ID</label>
+          <input class="input text-sm" id="migrate-sheet-id" placeholder="1BxiMVs0XRA5..." value="${S.sheetId||''}"/>
+        </div>
+        <button class="btn-amber w-full" id="migrate-btn" onclick="runMigration()">Calibrate &amp; Import</button>
+        <div id="migrate-progress" class="hidden flex-col gap-2">
+          <div class="h-1.5 rounded-full bg-gray-800 overflow-hidden">
+            <div id="migrate-bar" class="h-full rounded-full bg-purple-500 transition-all duration-300" style="width:0%"></div>
+          </div>
+          <p id="migrate-status" class="text-xs text-gray-400"></p>
+        </div>
+      </div>
+      <button onclick="closeSettings();signOutUser()" class="text-xs text-gray-600 hover:text-gray-400 transition-colors">Sign out</button>
+    </div>
+  </div>`;
+}
+
+function startFresh() {
+  _firstRunState = 'has_data'; // skip first-run check going forward
+  // Push a placeholder so db_hasData() returns true next time
+  if (_currentUser && _firebaseDB) {
+    _firebaseDB.ref(`users/${_currentUser.uid}/meta/setupDone`).set(true);
+  }
+  render();
+}
+
+function showMigrationPanel() {
+  const panel = el('migration-panel');
+  if (panel) panel.classList.toggle('hidden');
+}
+
+async function runMigration() {
+  const clientId = (el('migrate-client-id')||{}).value||'';
+  const sheetId = (el('migrate-sheet-id')||{}).value||'';
+  if (!clientId || !sheetId) { alert('Please enter both Client ID and Spreadsheet ID.'); return; }
+
+  S.clientId = clientId; localStorage.setItem('vds_client_id', clientId);
+  S.sheetId = sheetId; localStorage.setItem('vds_sheet_id', sheetId);
+
+  const btn = el('migrate-btn'); btn.disabled = true; btn.textContent = 'Connecting…';
+  const progressDiv = el('migrate-progress'); progressDiv.classList.remove('hidden');
+  progressDiv.style.display = 'flex';
+  const barEl = el('migrate-bar'), statusEl = el('migrate-status');
+
+  const onProgress = (msg, pct) => {
+    statusEl.textContent = msg;
+    barEl.style.width = pct + '%';
+  };
+
+  // Need a Sheets token — trigger GIS OAuth
+  const _doSheetsAuth = () => new Promise((resolve, reject) => {
+    try {
+      const tc = google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: 'https://www.googleapis.com/auth/spreadsheets.readonly',
+        callback: (resp) => {
+          console.log('[migration] token callback:', resp);
+          if (resp.error) { reject(new Error(resp.error + ': ' + (resp.error_description||''))); return; }
+          S.token = resp.access_token;
+          resolve();
+        },
+        error_callback: (e) => {
+          console.error('[migration] error_callback:', e);
+          reject(new Error(JSON.stringify(e)));
+        },
+      });
+      console.log('[migration] calling requestAccessToken');
+      tc.requestAccessToken({ prompt: 'consent' });
+    } catch(e) {
+      console.error('[migration] initTokenClient threw:', e);
+      reject(e);
+    }
+  });
+
+  try {
+    if (window.google?.accounts?.oauth2) {
+      await _doSheetsAuth();
+    } else {
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://accounts.google.com/gsi/client';
+        script.onload = () => _doSheetsAuth().then(resolve).catch(reject);
+        script.onerror = () => reject(new Error('Failed to load Google auth library'));
+        document.head.appendChild(script);
+      });
+    }
+  } catch(e) {
+    alert('Auth error: ' + e.message);
+    btn.disabled = false; btn.textContent = 'Calibrate & Import';
+    return;
+  }
+
+  try {
+    await migrateFromSheets(onProgress);
+    _firstRunState = 'has_data';
+    await new Promise(r => setTimeout(r, 1200));
+    render();
+  } catch(e) {
+    btn.disabled = false; btn.textContent = 'Try Again';
+  }
+}
+
+// ─── FIRST-RUN STATE ─────────────────────────────────────────────────────────
+// null = not checked yet; 'checking' = in-flight; 'has_data' = existing user; 'no_data' = new user
+let _firstRunState = null;
+let _lastUid = null; // track when user changes so we re-check
+
+function resetFirstRunState() { _firstRunState = null; }
+
 // ─── MAIN RENDER ─────────────────────────────────────────────────────────────
 function render() {
   renderNav();
   const app = el('app');
-  if (!S.clientId || !S.token) { app.innerHTML = renderSetup(); return; }
-  if (!S.sheetId) { app.innerHTML = renderConnectSheet(); return; }
+  if (!_currentUser) { app.innerHTML = renderSetup(); return; }
+
+  // Reset first-run check when account changes
+  if (_currentUser.uid !== _lastUid) { _lastUid = _currentUser.uid; _firstRunState = null; }
+
+  // New user check — async, re-renders when done
+  if (_firstRunState === null) {
+    _firstRunState = 'checking';
+    app.innerHTML = `<div class="min-h-screen flex items-center justify-center"><div class="spin w-8 h-8 rounded-full border-2 border-purple-500 border-t-transparent"></div></div>`;
+    db_hasData().then(has => {
+      _firstRunState = has ? 'has_data' : 'no_data';
+      render();
+    }).catch(() => { _firstRunState = 'has_data'; render(); }); // on error, assume existing user
+    return;
+  }
+  if (_firstRunState === 'checking') return; // spinner already shown
+  if (_firstRunState === 'no_data') { app.innerHTML = renderFirstRun(); return; }
+
   const pages = { home:renderHome, library:renderLibrary, stats:renderStats, add:renderAdd, ranking:renderRanking, calendar:renderCalendar, top10:renderTop10, relisten:renderRelisten, queue:renderQueue, recent:renderRecent, discover:renderDiscover, aoty:renderAoty, community:renderCommunity };
   if (S.route.startsWith('album/')) { app.innerHTML = renderAlbumDetail(S.routeData); return; }
   if (S.route.startsWith('artist/')) {
@@ -2056,11 +2234,10 @@ function postRender() {
   renderRightPanel();
 }
 
-// ─── SETUP SCREEN ────────────────────────────────────────────────────────────
+// ─── SIGN-IN SCREEN ──────────────────────────────────────────────────────────
 function renderSetup() {
-  const hasId = !!S.clientId;
   return `<div class="min-h-screen flex items-center justify-center p-6">
-    <div class="card max-w-md w-full flex flex-col items-center gap-6 text-center">
+    <div class="card max-w-sm w-full flex flex-col items-center gap-6 text-center">
       <div class="w-16 h-16 rounded-full bg-purple-600 flex items-center justify-center spin">
         <svg width="28" height="28" fill="none" stroke="#111" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
       </div>
@@ -2068,57 +2245,13 @@ function renderSetup() {
         <h1 class="text-2xl font-bold text-white">Vinyl Daily Spin</h1>
         <p class="text-gray-400 text-sm mt-1">Your personal music journal</p>
       </div>
-      ${!hasId ? `
-      <div class="w-full text-left">
-        <label class="text-sm text-gray-400 mb-2 block">Google OAuth Client ID</label>
-        <input class="input" id="client-id-input" placeholder="xxxxxx.apps.googleusercontent.com" value="${S.clientId}"/>
-        <p class="text-xs text-gray-600 mt-2">
-          Create one at <a href="https://console.cloud.google.com/apis/credentials" target="_blank" class="text-amber-400 underline">Google Cloud Console</a> → Credentials → Create OAuth Client ID (Web Application). Add <code class="text-amber-400">${location.origin}</code> as an Authorized JS Origin.
-        </p>
-      </div>
-      <button class="btn-amber w-full" onclick="saveClientId()">Continue</button>
-      ` : `
-      <p class="text-gray-400 text-sm">Sign in with Google to connect your Sheets spreadsheet.</p>
-      <button class="btn-amber w-full" onclick="requestToken()">Sign in with Google</button>
-      <button class="btn-gray text-xs" onclick="localStorage.removeItem('vds_client_id'); S.clientId=''; render()">Change Client ID</button>
-      `}
+      <p class="text-gray-400 text-sm">Sign in to access your library, queue, and listening history — synced across all your devices.</p>
+      <button class="btn-amber w-full flex items-center justify-center gap-2" onclick="signInWithGoogle()">
+        <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20H24v8h11.3C33.6 33.1 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3 0 5.7 1.1 7.8 2.9l5.7-5.7C34.2 6.5 29.4 4.5 24 4.5 12.7 4.5 3.5 13.7 3.5 25S12.7 45.5 24 45.5c11 0 20-8 20-20 0-1.4-.1-2.7-.4-4z"/><path fill="#FF3D00" d="M6.3 15.5l6.6 4.8C14.6 16.2 19 13 24 13c3 0 5.7 1.1 7.8 2.9l5.7-5.7C34.2 6.5 29.4 4.5 24 4.5c-7.6 0-14.2 4.3-17.7 11z"/><path fill="#4CAF50" d="M24 45.5c5.2 0 10-2 13.6-5.2l-6.3-5.3C29.3 36.9 26.8 37.9 24 37.9c-5.2 0-9.6-3-11.4-7.4l-6.5 5C9.8 41.3 16.4 45.5 24 45.5z"/><path fill="#1976D2" d="M43.6 20H24v8h11.3c-1 2.7-2.9 5-5.5 6.5l6.3 5.3c3.7-3.4 6-8.4 6-14.3 0-1.4-.1-2.7-.4-4z"/></svg>
+        Sign in with Google
+      </button>
     </div>
   </div>`;
-}
-
-function saveClientId() {
-  const val = el('client-id-input').value.trim();
-  if (!val) { alert('Please enter a Client ID'); return; }
-  S.clientId = val;
-  localStorage.setItem('vds_client_id', val);
-  initGIS();
-  render();
-}
-
-function renderConnectSheet() {
-  return `<div class="min-h-screen flex items-center justify-center p-6">
-    <div class="card max-w-md w-full flex flex-col items-center gap-6 text-center">
-      <div class="w-14 h-14 rounded-full bg-amber-500/15 border border-amber-500/20 flex items-center justify-center text-amber-400">${icons.disc}</div>
-      <div>
-        <h2 class="text-xl font-bold text-white">Connect Your Spreadsheet</h2>
-        <p class="text-gray-400 text-sm mt-1">Paste your Google Sheets spreadsheet ID (the long string in the URL between <code class="text-amber-400">/d/</code> and <code class="text-amber-400">/edit</code>)</p>
-      </div>
-      <div class="w-full text-left">
-        <label class="text-sm text-gray-400 mb-2 block">Spreadsheet ID</label>
-        <input class="input" id="sheet-id-input" placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms" value="${S.sheetId}"/>
-      </div>
-      <button class="btn-amber w-full" onclick="saveSheetId()">Connect</button>
-      <button class="btn-gray text-xs" onclick="S.token=null; render()">Sign out</button>
-    </div>
-  </div>`;
-}
-
-function saveSheetId() {
-  const val = el('sheet-id-input').value.trim();
-  if (!val) { alert('Please enter a Spreadsheet ID'); return; }
-  S.sheetId = val;
-  localStorage.setItem('vds_sheet_id', val);
-  render();
 }
 
 
@@ -2542,18 +2675,13 @@ function albumCard(a, showRating=false) {
   const link = a.AlbumLink||a.album_link||'';
   const esc = s => (s||'').replace(/"/g,'&quot;');
   const hasArt = !!_artCache[`${title}|${artist}`];
-  // Rank = this row's position in the full, unfiltered "Ranked albums" sheet (rowIndex 2 → #1).
-  // Always computed off the full list, not the currently-filtered/searched one, so ranks stay
-  // stable (and meaningful as a master ranking) no matter what filter is applied.
-  const libRows = (window._libraryAlbums||[]).map(x=>x.rowIndex);
-  const rank = a.rowIndex ? a.rowIndex - 1 : null;
-  const isFirst = !libRows.length || a.rowIndex === Math.min(...libRows);
-  const isLast = !libRows.length || a.rowIndex === Math.max(...libRows);
+  // Rank = position in the full, rating-sorted library (1-based).
+  const lib = window._libraryAlbums || [];
+  const rankIdx = lib.findIndex(x => (x._fbKey || x.rowIndex) === (a._fbKey || a.rowIndex));
+  const rank = rankIdx >= 0 ? rankIdx + 1 : null;
   return `<div class="card flex items-center gap-4 cursor-pointer hover:border-gray-700 transition-colors" onclick="showAlbumDetail(${JSON.stringify(JSON.stringify(a)).slice(1,-1)})">
-    ${rank ? `<div class="flex flex-col items-center justify-center gap-0.5 flex-shrink-0 w-6" onclick="event.stopPropagation()">
-      <button onclick="moveLibraryRow(${a.rowIndex},'up')" ${isFirst?'disabled':''} title="Move up" class="text-gray-500 hover:text-purple-400 disabled:opacity-20 disabled:cursor-not-allowed leading-none text-xs">▲</button>
-      <span class="text-gray-500 text-xs font-bold cursor-pointer hover:text-purple-400 hover:underline" onclick="moveLibraryRowTo(${a.rowIndex})" title="Click to jump straight to a rank">#${rank}</span>
-      <button onclick="moveLibraryRow(${a.rowIndex},'down')" ${isLast?'disabled':''} title="Move down" class="text-gray-500 hover:text-purple-400 disabled:opacity-20 disabled:cursor-not-allowed leading-none text-xs">▼</button>
+    ${rank ? `<div class="flex items-center justify-center flex-shrink-0 w-6">
+      <span class="text-gray-500 text-xs font-bold">#${rank}</span>
     </div>` : ''}
     <div class="w-28 h-28 rounded-xl overflow-hidden flex-shrink-0 bg-gradient-to-br from-purple-900 to-violet-950 flex items-center justify-center text-white">
       <div class="art-placeholder w-full h-full flex items-center justify-center" data-title="${esc(title)}" data-artist="${esc(artist)}">${icons.music}</div>
@@ -2572,8 +2700,8 @@ function albumCard(a, showRating=false) {
     </div>
     ${showRating && rating ? `<div class="flex items-center gap-1 text-amber-400 font-bold flex-shrink-0"><span>${icons.star}</span>${rating}</div>` : ''}
     ${link ? `<a href="${link}" target="_blank" onclick="event.stopPropagation()" class="text-gray-500 hover:text-purple-400 flex-shrink-0">${icons.link}</a>` : ''}
-    ${a.Review ? `<button onclick="event.stopPropagation();showReview(${a.rowIndex})" title="Read review" class="flex-shrink-0 text-gray-500 hover:text-purple-400 transition-colors p-1 rounded text-base leading-none">💬</button>` : ''}
-    <button onclick="event.stopPropagation();showCardMenu(this,'library','${escJsAttr(title)}','${escJsAttr(artist)}',${a.rowIndex||0},${relisten})" title="Options" class="flex-shrink-0 text-gray-500 hover:text-gray-300 transition-colors p-1 rounded leading-none" style="font-size:20px;letter-spacing:0">⋮</button>
+    ${a.Review ? `<button onclick="event.stopPropagation();showReview('${a._fbKey||a.rowIndex}')" title="Read review" class="flex-shrink-0 text-gray-500 hover:text-purple-400 transition-colors p-1 rounded text-base leading-none">💬</button>` : ''}
+    <button onclick="event.stopPropagation();showCardMenu(this,'library','${escJsAttr(title)}','${escJsAttr(artist)}','${a._fbKey||a.rowIndex}',${relisten})" title="Options" class="flex-shrink-0 text-gray-500 hover:text-gray-300 transition-colors p-1 rounded leading-none" style="font-size:20px;letter-spacing:0">⋮</button>
   </div>`;
 }
 
@@ -3004,21 +3132,16 @@ async function renderQueue() {
         <button class="btn-gray flex items-center gap-2 text-sm" onclick="navigate('add')">${icons.plus} Add Album</button>
       </div>
     </div>
-    <p class="text-gray-500 text-sm mb-4">Albums waiting to be listened to. A random one is picked each day. Use ▲▼ to reorder, or click the number to jump straight to a position.</p>
+    <p class="text-gray-500 text-sm mb-4">Albums waiting to be listened to. A random one is picked each day.</p>
     ${statsHtml}
     ${!list.length ? `<p class="text-gray-500 text-center py-16">Your queue is empty! Add some albums to get started.</p>` : ''}
     <div class="flex flex-col gap-3">
-      ${(() => { const rows = list.map(x=>x.rowIndex); const minRow = Math.min(...rows), maxRow = Math.max(...rows); return list.map(a => {
-        const isToday = daily && daily.rowIndex === a.rowIndex;
+      ${list.map((a, idx) => {
+        const isToday = daily && daily._fbKey === a._fbKey;
         const esc = s => (s||'').replace(/"/g,'&quot;');
-        const isFirst = a.rowIndex === minRow, isLast = a.rowIndex === maxRow;
-        const daysAgo = a.dateAdded ? Math.floor((new Date(today()) - new Date(a.dateAdded)) / 86400000) : null;
-        const ageBadge = daysAgo !== null ? `<span class="text-xs px-1.5 py-0.5 rounded font-medium flex-shrink-0" style="background:rgba(255,255,255,0.06);color:${daysAgo>90?'#f87171':daysAgo>30?'#fbbf24':'#9ca3af'}" title="Added ${daysAgo}d ago">${daysAgo}d</span>` : '';
         return `<div class="card flex items-center gap-4 ${isToday ? 'border-purple-500/30' : ''}">
-          <div class="flex flex-col items-center justify-center gap-0.5 flex-shrink-0 w-6">
-            <button onclick="moveQueueRow(${a.rowIndex},'up')" ${isFirst?'disabled':''} title="Move up" class="text-gray-500 hover:text-purple-400 disabled:opacity-20 disabled:cursor-not-allowed leading-none text-xs">▲</button>
-            <span class="text-gray-500 text-xs font-bold cursor-pointer hover:text-purple-400 hover:underline" onclick="moveQueueRowTo(${a.rowIndex},${list.length})" title="Click to jump straight to a position">#${a.rowIndex - 1}</span>
-            <button onclick="moveQueueRow(${a.rowIndex},'down')" ${isLast?'disabled':''} title="Move down" class="text-gray-500 hover:text-purple-400 disabled:opacity-20 disabled:cursor-not-allowed leading-none text-xs">▼</button>
+          <div class="flex items-center justify-center flex-shrink-0 w-6">
+            <span class="text-gray-500 text-xs font-bold">#${idx + 1}</span>
           </div>
           <div class="w-28 h-28 rounded-xl overflow-hidden flex-shrink-0 bg-gradient-to-br from-purple-900 to-violet-950 flex items-center justify-center text-white">
             <div class="art-placeholder w-full h-full flex items-center justify-center" data-title="${esc(a.title)}" data-artist="${esc(a.artist)}">${icons.music}</div>
@@ -3027,13 +3150,12 @@ async function renderQueue() {
             <div class="flex items-center gap-2 flex-wrap">
               <span class="text-white font-semibold text-lg truncate">${a.title}</span>
               ${isToday ? `<span class="px-1.5 py-0.5 rounded text-xs bg-purple-500/20 text-purple-300 font-medium">Today</span>` : ''}
-              ${ageBadge}
             </div>
             <span class="text-gray-400 text-sm mt-1 hover:underline cursor-pointer" onclick="event.stopPropagation();navigate('artist/'+encodeURIComponent('${escJsAttr(a.artist)}'))">${a.artist}</span>
           </div>
-          <button onclick="event.stopPropagation();showCardMenu(this,'queue','${escJsAttr(a.title)}','${escJsAttr(a.artist)}',${a.rowIndex})" title="Options" class="flex-shrink-0 text-gray-500 hover:text-gray-300 transition-colors p-1 rounded leading-none" style="font-size:20px;letter-spacing:0">⋮</button>
+          <button onclick="event.stopPropagation();showCardMenu(this,'queue','${escJsAttr(a.title)}','${escJsAttr(a.artist)}','${a._fbKey||a.rowIndex}')" title="Options" class="flex-shrink-0 text-gray-500 hover:text-gray-300 transition-colors p-1 rounded leading-none" style="font-size:20px;letter-spacing:0">⋮</button>
         </div>`;
-      }).join(''); })()}
+      }).join('')}
     </div>
   </div>`;
 }
@@ -3102,11 +3224,24 @@ async function submitRanking() {
   const btn = el('rank-submit'); btn.disabled=true; btn.textContent='Saving…';
   try {
     const todayStr = today();
-    // Add to Ranked albums sheet
-    await addToRankedAlbums({ title: album.title||album.album_title, artist: album.artist,
-      rating, track, review, mood: mood||'', replay: replay||'', date: todayStr });
-    // Remove from AlbumList
-    await deleteAlbumListRow(album.rowIndex);
+    const artUrl = _artCache[`${album.title||album.album_title}|${album.artist}`] || album.artUrl || '';
+    // Add to Firebase library
+    await db_addAlbum({
+      AlbumTitle: album.title || album.album_title || '',
+      Artist: album.artist || '',
+      Rating: rating,
+      FavoriteTrack: track || '',
+      Review: review || '',
+      MoodTag: mood || '',
+      WouldReplay: replay || '',
+      DateAssigned: todayStr,
+      Status: 'Completed',
+      PickedByMe: 'TRUE',
+      ArtUrl: artUrl,
+    });
+    // Remove from Firebase queue
+    const fbKey = album._fbKey || album.rowIndex;
+    await db_removeFromQueue(fbKey, album.title || album.album_title, album.artist);
     // Clear daily cache so a new album is picked tomorrow
     clearDailyCache();
     el('rank-form').style.display='none';
@@ -3841,8 +3976,10 @@ async function renderRelisten() {
   </div>`;
 }
 
-// ─── COMMUNITY / FIREBASE ────────────────────────────────────────────────────
+// ─── FIREBASE AUTH + DATA LAYER ──────────────────────────────────────────────
 let _firebaseDB = null;
+let _firebaseAuth = null;
+let _currentUser = null;   // firebase.User when signed in, null when not
 
 const _DEFAULT_FIREBASE_CFG = {
   apiKey: "AIzaSyAakewHFBcZ7v4q_4qM58w9bExABISSjcc",
@@ -3856,17 +3993,241 @@ const _DEFAULT_FIREBASE_CFG = {
 
 async function initFirebase() {
   if (_firebaseDB) return _firebaseDB;
-  const stored = (() => { try { return JSON.parse(localStorage.getItem('vds_firebase_cfg')||'null'); } catch(e) { return null; } })();
-  const cfg = (stored && stored.apiKey && stored.databaseURL) ? stored : _DEFAULT_FIREBASE_CFG;
-  // Lazy-load Firebase compat SDK if needed
+  // Lazy-load Firebase compat SDKs (app + database + auth)
   if (!window.firebase) {
     const load = src => new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
     await load('https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js');
     await load('https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js');
+    await load('https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js');
   }
-  if (!firebase.apps.length) firebase.initializeApp(cfg);
+  if (!firebase.apps.length) firebase.initializeApp(_DEFAULT_FIREBASE_CFG);
   _firebaseDB = firebase.database();
+  _firebaseAuth = firebase.auth();
+  // Listen for auth state changes — this drives the whole app
+  _firebaseAuth.onAuthStateChanged(user => {
+    _currentUser = user;
+    if (user) {
+      // Update community identity to match Firebase Auth
+      localStorage.setItem('vds_uid', user.uid);
+      localStorage.setItem('vds_display_name', user.displayName || user.email || 'User');
+    }
+    render();
+  });
   return _firebaseDB;
+}
+
+function signInWithGoogle() {
+  if (!_firebaseAuth) { initFirebase().then(signInWithGoogle); return; }
+  const provider = new firebase.auth.GoogleAuthProvider();
+  _firebaseAuth.signInWithPopup(provider).catch(e => alert('Sign-in failed: ' + e.message));
+}
+
+function signOutUser() {
+  if (_firebaseAuth) _firebaseAuth.signOut();
+}
+
+// ─── FIREBASE DATA: LIBRARY ──────────────────────────────────────────────────
+async function db_getLibrary() {
+  if (!_currentUser) return [];
+  const snap = await _firebaseDB.ref(`users/${_currentUser.uid}/library`).once('value');
+  const val = snap.val() || {};
+  const albums = Object.entries(val).map(([fbKey, data]) => {
+    const obj = {
+      _fbKey:       fbKey,
+      rowIndex:     fbKey,   // alias so legacy code that uses rowIndex still works
+      AlbumTitle:   data.title || '',
+      Artist:       data.artist || '',
+      Rating:       data.rating != null ? String(data.rating) : '',
+      Genre:        data.genre || '',
+      Year:         data.year ? String(data.year) : '',
+      Status:       data.status || 'Not Picked',
+      Review:       data.review || '',
+      ArtUrl:       data.artUrl || '',
+      DateAssigned: data.dateAssigned || '',
+      PickedByMe:   data.pickedByMe || 'TRUE',
+      FavoriteTrack:data.favoriteTrack || '',
+      TopSongs:     data.topSongs || '',
+      AlbumLink:    data.albumLink || '',
+      WouldReplay:  data.wouldReplay || '',
+      MoodTag:      data.moodTag || '',
+      _artUrl:      data.artUrl || '',
+      _addedAt:     data.addedAt || 0,
+    };
+    // Seed art cache
+    const title = cleanTitle(obj.AlbumTitle);
+    const artist = (obj.Artist || '').trim();
+    if (obj.ArtUrl && title && artist) {
+      const key = `${title}|${artist}`;
+      _artCache[key] = _itunesHiRes(obj.ArtUrl);
+      persistArtUrl(key, _itunesHiRes(obj.ArtUrl));
+    }
+    return obj;
+  });
+  // Sort by rating desc, then by addedAt asc within same rating
+  return albums.sort((a, b) => {
+    const rd = (parseFloat(b.Rating) || 0) - (parseFloat(a.Rating) || 0);
+    return rd !== 0 ? rd : a._addedAt - b._addedAt;
+  });
+}
+
+async function db_addAlbum(album) {
+  if (!_currentUser) throw new Error('Not signed in');
+  const ref = _firebaseDB.ref(`users/${_currentUser.uid}/library`).push();
+  await ref.set({
+    title:        (album.AlbumTitle || album.title || '').trim(),
+    artist:       (album.Artist || album.artist || '').trim(),
+    rating:       String(album.Rating || album.rating || ''),
+    genre:        album.Genre || album.genre || '',
+    year:         String(album.Year || album.year || ''),
+    status:       album.Status || album.status || 'Not Picked',
+    review:       album.Review || album.review || '',
+    artUrl:       album.ArtUrl || album.artUrl || '',
+    dateAssigned: album.DateAssigned || album.dateAssigned || '',
+    pickedByMe:   album.PickedByMe || album.pickedByMe || 'TRUE',
+    favoriteTrack:album.FavoriteTrack || album.favoriteTrack || '',
+    topSongs:     album.TopSongs || album.topSongs || '',
+    albumLink:    album.AlbumLink || album.albumLink || '',
+    wouldReplay:  album.WouldReplay || album.wouldReplay || '',
+    moodTag:      album.MoodTag || album.moodTag || '',
+    addedAt:      Date.now(),
+  });
+  return ref.key;
+}
+
+// fields: canonical keys e.g. { Rating: '8', Status: 'Completed' }
+async function db_updateAlbum(fbKey, fields) {
+  if (!_currentUser || !fbKey) return;
+  const MAP = {
+    AlbumTitle:'title', Artist:'artist', Rating:'rating', Genre:'genre', Year:'year',
+    Status:'status', Review:'review', ArtUrl:'artUrl', DateAssigned:'dateAssigned',
+    PickedByMe:'pickedByMe', FavoriteTrack:'favoriteTrack', TopSongs:'topSongs',
+    AlbumLink:'albumLink', WouldReplay:'wouldReplay', MoodTag:'moodTag',
+  };
+  const updates = {};
+  Object.entries(fields).forEach(([k, v]) => { updates[MAP[k] || k] = v; });
+  await _firebaseDB.ref(`users/${_currentUser.uid}/library/${fbKey}`).update(updates);
+}
+
+async function db_deleteFromLibrary(fbKey) {
+  if (!_currentUser || !fbKey) return;
+  await _firebaseDB.ref(`users/${_currentUser.uid}/library/${fbKey}`).remove();
+}
+
+// ─── FIREBASE DATA: QUEUE ────────────────────────────────────────────────────
+async function db_getQueue() {
+  if (!_currentUser) return [];
+  const snap = await _firebaseDB.ref(`users/${_currentUser.uid}/queue`).once('value');
+  const val = snap.val() || {};
+  const qDates = (() => { try { return JSON.parse(localStorage.getItem('vds_queue_dates')||'{}'); } catch(e) { return {}; } })();
+  const items = Object.entries(val).map(([fbKey, data]) => {
+    if (data.artUrl) _artCache[`${data.title}|${data.artist}`] = _itunesHiRes(data.artUrl);
+    return {
+      _fbKey: fbKey, rowIndex: fbKey,
+      title: data.title || '', artist: data.artist || '',
+      artUrl: data.artUrl || '',
+      dateAdded: data.dateAdded || qDates[`${data.title}|${data.artist}`] || null,
+      _addedAt: data.addedAt || 0,
+    };
+  });
+  return items.sort((a, b) => a._addedAt - b._addedAt);
+}
+
+async function db_addToQueue(title, artist, artUrl) {
+  if (!_currentUser) throw new Error('Not signed in');
+  const dateAdded = today();
+  const ref = _firebaseDB.ref(`users/${_currentUser.uid}/queue`).push();
+  await ref.set({ title, artist, artUrl: artUrl || '', dateAdded, addedAt: Date.now() });
+  const qDates = (() => { try { return JSON.parse(localStorage.getItem('vds_queue_dates')||'{}'); } catch(e) { return {}; } })();
+  qDates[`${title}|${artist}`] = dateAdded;
+  localStorage.setItem('vds_queue_dates', JSON.stringify(qDates));
+  return ref.key;
+}
+
+async function db_removeFromQueue(fbKey, title, artist) {
+  if (!_currentUser || !fbKey) return;
+  await _firebaseDB.ref(`users/${_currentUser.uid}/queue/${fbKey}`).remove();
+  if (title && artist) {
+    const qDates = (() => { try { return JSON.parse(localStorage.getItem('vds_queue_dates')||'{}'); } catch(e) { return {}; } })();
+    delete qDates[`${title}|${artist}`];
+    localStorage.setItem('vds_queue_dates', JSON.stringify(qDates));
+  }
+}
+
+async function db_updateQueueArt(fbKey, artUrl) {
+  if (!_currentUser || !fbKey) return;
+  await _firebaseDB.ref(`users/${_currentUser.uid}/queue/${fbKey}`).update({ artUrl });
+}
+
+// ─── FIREBASE DATA: DAILY ALBUM ──────────────────────────────────────────────
+async function db_getDailyAlbum() {
+  if (!_currentUser) return { error: 'Not signed in' };
+  const dateStr = today();
+  const dailyRef = _firebaseDB.ref(`users/${_currentUser.uid}/dailyAlbum/${dateStr}`);
+  const snap = await dailyRef.once('value');
+  if (snap.exists()) return { album: snap.val(), alreadyAssigned: true };
+  const library = await db_getLibrary();
+  const candidates = library.filter(a => a.Status === 'Not Picked');
+  if (!candidates.length) return { noCandidates: true };
+  const picked = candidates[Math.floor(Math.random() * candidates.length)];
+  await db_updateAlbum(picked._fbKey, { Status: 'Assigned', DateAssigned: dateStr });
+  const albumData = {
+    date: dateStr, album_title: picked.AlbumTitle, artist: picked.Artist,
+    year: picked.Year || '', genre: picked.Genre || '', top_songs: picked.TopSongs || '',
+    album_link: picked.AlbumLink || '', status: 'Assigned', _fbKey: picked._fbKey,
+    artUrl: picked.ArtUrl || picked._artUrl || '',
+  };
+  await dailyRef.set(albumData);
+  return { album: albumData };
+}
+
+// Check if user has any library data or has explicitly completed setup (for first-run detection)
+async function db_hasData() {
+  if (!_currentUser) return false;
+  const [libSnap, metaSnap] = await Promise.all([
+    _firebaseDB.ref(`users/${_currentUser.uid}/library`).limitToFirst(1).once('value'),
+    _firebaseDB.ref(`users/${_currentUser.uid}/meta/setupDone`).once('value'),
+  ]);
+  return libSnap.exists() || metaSnap.val() === true;
+}
+
+// ─── SHEETS → FIREBASE MIGRATION ─────────────────────────────────────────────
+async function migrateFromSheets(onProgress) {
+  try {
+    onProgress('Connecting to Google Sheets…', 5);
+    // Need Sheets token — trigger OAuth just for migration
+    if (!S.token) throw new Error('Sign in to Google Sheets first to import your data.');
+    onProgress('Reading your library…', 15);
+    const rows = await sheetsGet('Ranked albums!A:Z');
+    if (rows.length < 2) throw new Error('No library data found in sheet.');
+    const headers = rows[0];
+    const albums = rows.slice(1).map(row => {
+      const obj = {};
+      headers.forEach((h, i) => { const c = canonicalHeader(h); if (!obj[c] && row[i]) obj[c] = (row[i]||'').trim(); });
+      return obj;
+    }).filter(a => a.AlbumTitle);
+
+    onProgress(`Importing ${albums.length} library albums…`, 25);
+    let done = 0;
+    for (const a of albums) {
+      await db_addAlbum(a);
+      done++;
+      if (done % 10 === 0) onProgress(`Imported ${done} / ${albums.length} library albums…`, 25 + Math.round(done/albums.length*50));
+      if (done % 20 === 0) await new Promise(r => setTimeout(r, 200));
+    }
+
+    onProgress('Reading your queue…', 78);
+    const qRows = await sheetsGet('AlbumList!A:C');
+    const qItems = qRows.slice(1).map(r => ({ title:(r[0]||'').trim(), artist:(r[1]||'').trim(), artUrl:(r[2]||'').trim() })).filter(q => q.title);
+    onProgress(`Importing ${qItems.length} queue albums…`, 82);
+    for (const q of qItems) {
+      await db_addToQueue(q.title, q.artist, q.artUrl);
+      await new Promise(r => setTimeout(r, 50));
+    }
+    onProgress('✅ Migration complete!', 100);
+  } catch(e) {
+    onProgress('❌ ' + e.message, 0);
+    throw e;
+  }
 }
 
 function setupFirebase() {
@@ -3951,6 +4312,182 @@ async function shareToCommunity() {
   } catch(e) { alert('Error sharing: ' + e.message); }
 }
 
+// ─── GROUP QUEUE ─────────────────────────────────────────────────────────────
+
+function _generateGroupId() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  return Array.from({length: 6}, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+}
+
+async function _ensureIdentity(db) {
+  let uid = localStorage.getItem('vds_uid');
+  if (!uid) { uid = Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem('vds_uid', uid); }
+  let name = localStorage.getItem('vds_display_name') || '';
+  if (!name) {
+    name = (prompt('Choose a display name for the community:') || '').trim();
+    if (!name) return null;
+    localStorage.setItem('vds_display_name', name);
+  }
+  return { uid, name };
+}
+
+async function createGroup() {
+  const db = await initFirebase();
+  if (!db) { if (confirm('Firebase is required. Set it up now?')) setupFirebase(); return; }
+  const groupName = (prompt('Name your group (e.g. "The Vinyl Crew"):') || '').trim();
+  if (!groupName) return;
+  const identity = await _ensureIdentity(db);
+  if (!identity) return;
+  const { uid, name } = identity;
+  const groupId = _generateGroupId();
+  await db.ref(`groups/${groupId}`).set({ name: groupName, createdAt: Date.now(), createdBy: uid });
+  await db.ref(`groups/${groupId}/members/${uid}`).set({ displayName: name, joinedAt: Date.now() });
+  localStorage.setItem('vds_group_id', groupId);
+  render();
+}
+
+async function joinGroup() {
+  const db = await initFirebase();
+  if (!db) { if (confirm('Firebase is required. Set it up now?')) setupFirebase(); return; }
+  const groupId = (prompt('Enter the 6-character group code:') || '').trim().toUpperCase();
+  if (!groupId) return;
+  const snap = await db.ref(`groups/${groupId}/name`).once('value');
+  if (!snap.exists()) { alert('Group not found. Check the code and try again.'); return; }
+  const identity = await _ensureIdentity(db);
+  if (!identity) return;
+  const { uid, name } = identity;
+  await db.ref(`groups/${groupId}/members/${uid}`).set({ displayName: name, joinedAt: Date.now() });
+  localStorage.setItem('vds_group_id', groupId);
+  render();
+}
+
+async function leaveGroup() {
+  if (!confirm('Leave this group?')) return;
+  const db = await initFirebase();
+  const groupId = localStorage.getItem('vds_group_id');
+  const uid = localStorage.getItem('vds_uid');
+  if (db && groupId && uid) await db.ref(`groups/${groupId}/members/${uid}`).remove();
+  localStorage.removeItem('vds_group_id');
+  render();
+}
+
+async function _syncQueueToGroup(db, groupId) {
+  const uid = localStorage.getItem('vds_uid');
+  if (!uid) return;
+  try {
+    const albums = await getAlbumList();
+    const simplified = albums.map(a => ({
+      title: a.title,
+      artist: a.artist,
+      artUrl: _artCache[`${a.title}|${a.artist}`] || a.artUrl || ''
+    }));
+    await db.ref(`groups/${groupId}/memberQueues/${uid}`).set({
+      albums: simplified,
+      syncedAt: Date.now()
+    });
+  } catch(e) {}
+}
+
+async function _pickGroupAlbum(db, groupId) {
+  const dateKey = today();
+  // Already picked today? Return it.
+  const pickSnap = await db.ref(`groups/${groupId}/dailyPick/${dateKey}`).once('value');
+  if (pickSnap.exists()) return pickSnap.val();
+  // Pool all queue albums from all members
+  const [queuesSnap, membersSnap] = await Promise.all([
+    db.ref(`groups/${groupId}/memberQueues`).once('value'),
+    db.ref(`groups/${groupId}/members`).once('value')
+  ]);
+  const queuesVal = queuesSnap.val() || {};
+  const members = membersSnap.val() || {};
+  const pool = [];
+  Object.entries(queuesVal).forEach(([uid, data]) => {
+    const fromName = members[uid]?.displayName || 'Someone';
+    (data.albums || []).forEach(album => pool.push({ ...album, fromName }));
+  });
+  if (!pool.length) return null;
+  // Randomly pick one and lock it in
+  const picked = pool[Math.floor(Math.random() * pool.length)];
+  const pickData = {
+    albumTitle: picked.title || '',
+    artist: picked.artist || '',
+    artUrl: picked.artUrl || '',
+    fromName: picked.fromName,
+    selectedAt: Date.now()
+  };
+  await db.ref(`groups/${groupId}/dailyPick/${dateKey}`).set(pickData);
+  return pickData;
+}
+
+async function renderGroupQueue(db) {
+  const groupId = localStorage.getItem('vds_group_id');
+  const esc = s => (s||'').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+  if (!groupId) {
+    return `
+    <div class="card mb-6" style="border:1px solid rgba(139,92,246,0.2)">
+      <div class="flex items-center gap-2 mb-2">
+        <span class="text-xl">👥</span>
+        <h2 class="text-white font-bold text-lg">Group Queue</h2>
+      </div>
+      <p class="text-gray-500 text-sm mb-4">Listen to the same album as your friends each day. One member's pick is randomly chosen as the group listen.</p>
+      <div class="flex gap-3">
+        <button onclick="createGroup()" class="btn-amber flex-1">Create Group</button>
+        <button onclick="joinGroup()" class="btn-gray flex-1">Join Group</button>
+      </div>
+    </div>`;
+  }
+
+  let groupName = 'Your Group', memberCount = 0;
+  try {
+    const groupSnap = await db.ref(`groups/${groupId}`).once('value');
+    const groupData = groupSnap.val() || {};
+    groupName = groupData.name || 'Your Group';
+    memberCount = Object.keys(groupData.members || {}).length;
+  } catch(e) {}
+
+  // Sync current user's queue to the group pool (non-blocking)
+  _syncQueueToGroup(db, groupId).catch(() => {});
+
+  const pick = await _pickGroupAlbum(db, groupId);
+
+  const albumSection = pick ? `
+    <div class="flex items-center gap-4 mt-3 p-3 rounded-xl" style="background:rgba(139,92,246,0.08);border:1px solid rgba(139,92,246,0.15)">
+      <div class="w-16 h-16 rounded-xl overflow-hidden flex-shrink-0 bg-gradient-to-br from-purple-900 to-violet-950 flex items-center justify-center">
+        ${pick.artUrl ? `<img src="${esc(pick.artUrl)}" class="w-full h-full object-cover" onerror="this.style.display='none'">` : `<div class="text-gray-600">${icons.music}</div>`}
+      </div>
+      <div class="flex-1 min-w-0">
+        <div class="text-xs text-purple-400 font-semibold uppercase tracking-wide mb-1">🎲 Today's Group Listen</div>
+        <div class="text-white font-bold truncate">${esc(pick.albumTitle)}</div>
+        <div class="text-purple-300 text-sm truncate">${esc(pick.artist)}</div>
+        <div class="text-gray-500 text-xs mt-1">from ${esc(pick.fromName)}'s queue</div>
+      </div>
+    </div>` : `
+    <div class="mt-3 p-3 rounded-xl text-center text-gray-500 text-sm" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06)">
+      ⏳ Waiting for a group member to share their album today
+    </div>`;
+
+  return `
+    <div class="card mb-6" style="border:1px solid rgba(139,92,246,0.2)">
+      <div class="flex items-center justify-between mb-1">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-xl">👥</span>
+          <h2 class="text-white font-bold text-lg">${esc(groupName)}</h2>
+          <span class="text-xs text-gray-500">${memberCount} member${memberCount !== 1 ? 's' : ''}</span>
+        </div>
+        <button onclick="leaveGroup()" class="text-xs text-gray-600 hover:text-red-400 transition-colors">Leave</button>
+      </div>
+      <div class="flex items-center gap-2 mt-1">
+        <span class="text-xs text-gray-500">Group code:</span>
+        <code class="text-xs text-purple-400 font-mono px-2 py-0.5 rounded cursor-pointer select-all"
+              style="background:rgba(139,92,246,0.12)"
+              onclick="navigator.clipboard.writeText('${groupId}');this.textContent='✓ Copied!';setTimeout(()=>this.textContent='${groupId}',1500)">${groupId}</code>
+        <span class="text-xs text-gray-600">— share with friends to join</span>
+      </div>
+      ${albumSection}
+    </div>`;
+}
+
 async function renderCommunity() {
   const db = await initFirebase();
   if (!db) {
@@ -3971,6 +4508,7 @@ async function renderCommunity() {
     const val = snap.val() || {};
     entries = Object.values(val).sort((a,b) => b.timestamp - a.timestamp);
   } catch(e) {}
+  const groupSection = await renderGroupQueue(db);
   const rColor = r => { const n=Number(r); if(n>=9)return'#4ade80'; if(n>=7)return'#c4b5fd'; if(n>=5)return'#fbbf24'; return'#f87171'; };
   const esc = s => (s||'').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const myUid = localStorage.getItem('vds_uid') || '';
@@ -3980,6 +4518,7 @@ async function renderCommunity() {
       <button onclick="setupFirebase()" class="text-xs text-gray-600 hover:text-gray-400">⚙ Config</button>
     </div>
     <p class="text-gray-500 text-sm mb-5">Today's picks — ${fmt_date(today())}</p>
+    ${groupSection}
     ${!entries.length ? `
     <div class="card flex flex-col items-center gap-3 text-center py-10">
       <div class="text-4xl">🎵</div>
@@ -4562,7 +5101,7 @@ const THEME_DECOS = {
 function renderRightPanel() {
   const panel = document.getElementById('right-panel');
   if (!panel) return;
-  const auth = S.clientId && S.token && S.sheetId;
+  const auth = !!_currentUser;
   panel.style.display = auth ? '' : 'none';
   if (!auth) return;
 
@@ -5017,11 +5556,10 @@ function saveSettingsGoal() {
 window.onload = () => {
   loadArtFromStorage();
   initThemeSwatches();
-  const gisScript = document.createElement('script');
-  gisScript.src = 'https://accounts.google.com/gsi/client';
-  gisScript.onload = () => { if (S.clientId) initGIS(); render(); };
-  gisScript.onerror = () => render();
-  document.head.appendChild(gisScript);
+  // initFirebase() sets up onAuthStateChanged which calls render() when auth state is known.
+  // Show a spinner immediately while Firebase loads.
+  el('app').innerHTML = `<div class="min-h-screen flex items-center justify-center"><div class="spin w-10 h-10 rounded-full border-2 border-purple-500 border-t-transparent"></div></div>`;
+  initFirebase().catch(e => { console.error('Firebase init failed:', e); render(); });
 };
 </script>
 </body>
