@@ -154,8 +154,10 @@ tailwind.config = {
     <!-- Import -->
     <div>
       <p class="text-xs font-semibold uppercase tracking-widest text-gray-500 mb-1">Import</p>
-      <p class="text-xs text-gray-600 mb-3">Pull your rated albums from 1001 Albums Generator into your Library.</p>
-      <button onclick="closeSettings();import1001Albums()" class="w-full text-left px-3 py-2 rounded-lg text-sm text-purple-300 hover:bg-white/5 transition-colors">📥 Import from 1001 Albums Generator</button>
+      <div id="import-1001-section" class="hidden">
+        <p class="text-xs text-gray-600 mb-3">Pull your rated albums from 1001 Albums Generator into your Library.</p>
+        <button onclick="closeSettings();import1001Albums()" class="w-full text-left px-3 py-2 rounded-lg text-sm text-purple-300 hover:bg-white/5 transition-colors">📥 Import from 1001 Albums Generator</button>
+      </div>
       <button onclick="closeSettings();deleteUnknownAlbums()" class="w-full text-left px-3 py-2 rounded-lg text-sm text-red-400 hover:bg-white/5 transition-colors">🗑 Delete blank-title rows from Library</button>
     </div>
   </div>
@@ -5502,6 +5504,12 @@ function initThemeSwatches() {
 }
 
 function openSettings() {
+  // Show 1001 Albums import only for authorized user
+  const import1001Section = document.getElementById('import-1001-section');
+  if (import1001Section) {
+    const authorized = _currentUser && _currentUser.email === 'tfwealth2025@gmail.com';
+    import1001Section.classList.toggle('hidden', !authorized);
+  }
   // Populate theme swatches
   const container = document.getElementById('settings-theme-swatches');
   if (container) {
