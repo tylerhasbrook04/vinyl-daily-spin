@@ -677,6 +677,10 @@ function showCardMenu(btn, type, title, artist, rowIndex, hasRelisten) {
     html += sep;
     html += `<button class="${btnClass}" style="color:#f87171" onclick="event.stopPropagation();hideCardMenu();menuDeleteQueue()">🗑 Remove from Queue</button>`;
   }
+  if (type === 'library') {
+    html += sep;
+    html += `<button class="${btnClass}" style="color:#f87171" onclick="event.stopPropagation();hideCardMenu();menuDeleteLibrary()">🗑 Delete from Library</button>`;
+  }
   menu.innerHTML = html;
   const rect = btn.getBoundingClientRect();
   menu.style.top = (rect.bottom + 6) + 'px';
@@ -757,6 +761,30 @@ async function menuDeleteQueue() {
       navigate('queue');
     }
   } catch(e) { alert('Error removing from queue: ' + e.message); }
+}
+
+async function menuDeleteLibrary() {
+  if (!_cardMenuCtx || !_cardMenuCtx.rowIndex) return;
+  const { title, artist, rowIndex, card } = _cardMenuCtx;
+  if (!confirm(`Delete "${title}" from your library? This cannot be undone.`)) return;
+  try {
+    await db_deleteFromLibrary(rowIndex);
+    if (window._libraryAlbums) {
+      window._libraryAlbums = window._libraryAlbums.filter(a => (a._fbKey || a.rowIndex) !== rowIndex);
+    }
+    _cardMenuCtx = null;
+    if (card && card.isConnected) {
+      card.remove();
+      const countSpan = document.querySelector('h1 span');
+      if (countSpan) {
+        const n = Math.max(0, parseInt(countSpan.textContent.replace(/\D/g,''), 10) - 1);
+        countSpan.textContent = `(${n})`;
+      }
+    } else {
+      if (S.route === 'library') filterLibrary();
+      else render();
+    }
+  } catch(e) { alert('Error deleting from library: ' + e.message); }
 }
 
 // ─── EDIT QUEUE ENTRY ─────────────────────────────────────────────────────────
