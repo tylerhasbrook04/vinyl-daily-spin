@@ -5507,7 +5507,8 @@ function openSettings() {
   // Show 1001 Albums import only for authorized user
   const import1001Section = document.getElementById('import-1001-section');
   if (import1001Section) {
-    const authorized = _currentUser && _currentUser.email === 'tfwealth2025@gmail.com';
+    console.log('[VDS] openSettings user email:', _currentUser && _currentUser.email);
+    const authorized = _currentUser && _currentUser.email && _currentUser.email.toLowerCase() === 'tfwealth2025@gmail.com';
     import1001Section.classList.toggle('hidden', !authorized);
   }
   // Populate theme swatches
