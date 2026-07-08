@@ -159,6 +159,7 @@ tailwind.config = {
         <button onclick="closeSettings();import1001Albums()" class="w-full text-left px-3 py-2 rounded-lg text-sm text-purple-300 hover:bg-white/5 transition-colors">📥 Import from 1001 Albums Generator <span class="ml-1 text-xs bg-yellow-500/20 text-yellow-400 px-1.5 py-0.5 rounded">Admin only</span></button>
       </div>
       <button onclick="closeSettings();deleteUnknownAlbums()" class="w-full text-left px-3 py-2 rounded-lg text-sm text-red-400 hover:bg-white/5 transition-colors">🗑 Delete blank-title rows from Library</button>
+      <button onclick="closeSettings();findAndRemoveDuplicates()" class="w-full text-left px-3 py-2 rounded-lg text-sm text-amber-400 hover:bg-white/5 transition-colors">🔍 Find & Remove Duplicates</button>
     </div>
   </div>
 </div>
@@ -483,6 +484,31 @@ async function deleteUnknownAlbums() {
     await sheetsDeleteRows(tabId, badRows);
     alert(`✅ Deleted ${badRows.length} unknown album row${badRows.length !== 1 ? 's' : ''}.`);
     render();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function findAndRemoveDuplicates() {
+  try {
+    const albums = await getAllAlbums();
+    const seen = new Map();
+    const dupes = [];
+    for (const a of albums) {
+      const key = `${_artNorm(cleanTitle(a.AlbumTitle||''))}|${_artNorm(a.Artist||'')}`;
+      if (seen.has(key)) {
+        dupes.push(a); // keep the first, mark later ones as duplicates
+      } else {
+        seen.set(key, a);
+      }
+    }
+    if (!dupes.length) { alert('✅ No duplicates found in your library!'); return; }
+    const list = dupes.map(a => `• ${a.AlbumTitle} — ${a.Artist}`).join('\n');
+    if (!confirm(`Found ${dupes.length} duplicate${dupes.length !== 1 ? 's' : ''}:\n\n${list}\n\nDelete these duplicates? (The first occurrence of each is kept.)`)) return;
+    for (const a of dupes) {
+      await db_deleteFromLibrary(a._fbKey || a.rowIndex);
+    }
+    window._libraryAlbums = null;
+    alert(`✅ Deleted ${dupes.length} duplicate${dupes.length !== 1 ? 's' : ''}.`);
+    if (S.route === 'library') render();
   } catch(e) { alert('Error: ' + e.message); }
 }
 
@@ -3054,13 +3080,14 @@ async function renderAdd() {
 
     <div class="card flex flex-col gap-4">
       <!-- Shared fields -->
-      <div><label class="text-sm text-gray-400 mb-1 block">Album Title *</label><input class="input" id="add-title" placeholder="Dark Side of the Moon" oninput="checkAddAlbumWarning()"/></div>
-      <div><label class="text-sm text-gray-400 mb-1 block">Artist *</label><input class="input" id="add-artist" placeholder="Pink Floyd" oninput="checkAddAlbumWarning()"/></div>
+      <div><label class="text-sm text-gray-400 mb-1 block">Album Title *</label><input class="input" id="add-title" placeholder="Dark Side of the Moon" oninput="checkAddAlbumWarning();autoFetchAddArt()"/></div>
+      <div><label class="text-sm text-gray-400 mb-1 block">Artist *</label><input class="input" id="add-artist" placeholder="Pink Floyd" oninput="checkAddAlbumWarning();autoFetchAddArt()"/></div>
       <div id="add-warning" class="hidden text-xs text-amber-400"></div>
       <div>
         <label class="text-sm text-gray-400 mb-1 block">Cover Art URL <span class="text-gray-600">(optional)</span></label>
         <input class="input" id="add-art-url" placeholder="https://i.scdn.co/image/... or any image URL"/>
-        <p class="text-xs text-gray-600 mt-1">Paste any direct image link. Right-click an album cover online → Copy Image Address.</p>
+        <p class="text-xs text-gray-600 mt-1">Leave blank — art is fetched automatically once you enter the album and artist.</p>
+        <div id="add-art-preview"></div>
       </div>
 
       <!-- Rate fields (hidden in queue mode) -->
@@ -3091,6 +3118,7 @@ async function renderAdd() {
           </div>
           <input type="hidden" id="add-replay" value=""/>
         </div>
+        ${trackRatingsSectionHtml('add')}
       </div>
 
       <button class="btn-amber mt-2" id="add-submit" onclick="submitAddAlbum()">Add to Queue</button>
@@ -3249,6 +3277,129 @@ async function submitAddAlbum() {
   btn.disabled=false; btn.textContent='Add to Queue';
 }
 
+// ─── ART AUTO-FETCH (Add Album page) ─────────────────────────────────────────
+let _autoArtTimer = null;
+function autoFetchAddArt() {
+  clearTimeout(_autoArtTimer);
+  _autoArtTimer = setTimeout(async () => {
+    const title = (el('add-title')||{}).value.trim();
+    const artist = (el('add-artist')||{}).value.trim();
+    if (!title || !artist || title.length < 2 || artist.length < 2) return;
+    const urlField = el('add-art-url');
+    if (urlField && urlField.value.trim()) return; // don't overwrite user-set URL
+    const preview = el('add-art-preview');
+    if (preview) preview.innerHTML = `<p class="text-xs text-gray-500 mt-1">🔍 Searching for cover art…</p>`;
+    const url = await fetchArtFromItunes(title, artist);
+    if (!url) {
+      if (preview) preview.innerHTML = `<p class="text-xs text-gray-500 mt-1">No art found — paste a URL above if you have one.</p>`;
+      return;
+    }
+    if (urlField) urlField.value = url;
+    if (preview) preview.innerHTML = `<div class="flex items-center gap-2 mt-2"><img src="${url}" class="w-10 h-10 rounded-lg object-cover border border-white/10"/><span class="text-xs text-green-400">✅ Cover art found</span></div>`;
+  }, 900);
+}
+
+// ─── TRACKLIST FETCH + TRACK RATINGS CALCULATOR ──────────────────────────────
+async function fetchTracklist(title, artist) {
+  try {
+    const q = encodeURIComponent(`${artist} ${title}`);
+    const resp = await fetchItunes(`https://itunes.apple.com/search?term=${q}&media=music&entity=album&limit=5`);
+    if (!resp.ok) return null;
+    const albums = (await resp.json()).results || [];
+    const norm = s => (s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+    const ntl = norm(title), nal = norm(artist);
+    let best = albums.find(a => norm(a.collectionName).includes(ntl.slice(0,8)) && norm(a.artistName).includes(nal.slice(0,5)));
+    if (!best) best = albums[0];
+    if (!best) return null;
+    const resp2 = await fetchItunes(`https://itunes.apple.com/lookup?id=${best.collectionId}&entity=song`);
+    if (!resp2.ok) return null;
+    const tracks = ((await resp2.json()).results || [])
+      .filter(r => r.wrapperType === 'track' && r.kind === 'song')
+      .sort((a, b) => (a.trackNumber||99) - (b.trackNumber||99));
+    return tracks.map(t => ({ n: t.trackNumber, name: t.trackName }));
+  } catch(e) { return null; }
+}
+
+function parseTrackScores(text) {
+  const scores = [];
+  for (const line of text.split('\n').map(l => l.trim()).filter(Boolean)) {
+    const m = line.match(/(?:^\d+[\.\)]\s*)?(?:.+?\s*[-–]\s*)?(\d+(?:\.\d+)?)(?:\/10)?\s*$/);
+    if (m) {
+      const val = parseFloat(m[1]);
+      if (val >= 0 && val <= 10) scores.push(val);
+    }
+  }
+  return scores;
+}
+
+function trackRatingsSectionHtml(ctx) {
+  return `<div style="border-top:1px solid rgba(255,255,255,0.06);padding-top:12px">
+    <button onclick="toggleTrackRatings('${ctx}')" class="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors w-full text-left">
+      <span id="track-arrow-${ctx}" class="text-xs">▶</span>
+      🎵 Calculate from track ratings
+    </button>
+    <div id="track-panel-${ctx}" class="hidden mt-3 flex flex-col gap-3">
+      <p class="text-xs text-gray-500">Paste your scores one per line — we'll match them to the official tracklist in order.</p>
+      <textarea class="input text-sm font-mono" id="track-input-${ctx}" rows="5" placeholder="9&#10;7&#10;10&#10;8&#10;6"></textarea>
+      <button id="track-calc-btn-${ctx}" class="btn-gray text-sm" onclick="calculateFromTracks('${ctx}')">Calculate Average →</button>
+      <div id="track-result-${ctx}" class="hidden"></div>
+    </div>
+  </div>`;
+}
+
+const _trackRatingsOpen = {};
+function toggleTrackRatings(ctx) {
+  _trackRatingsOpen[ctx] = !_trackRatingsOpen[ctx];
+  const panel = el(`track-panel-${ctx}`);
+  const arrow = el(`track-arrow-${ctx}`);
+  if (panel) panel.classList.toggle('hidden', !_trackRatingsOpen[ctx]);
+  if (arrow) arrow.textContent = _trackRatingsOpen[ctx] ? '▼' : '▶';
+}
+
+async function calculateFromTracks(ctx) {
+  const resultEl = el(`track-result-${ctx}`);
+  const inputEl = el(`track-input-${ctx}`);
+  const btnEl = el(`track-calc-btn-${ctx}`);
+  if (!inputEl || !resultEl) return;
+  const scores = parseTrackScores(inputEl.value);
+  if (!scores.length) { resultEl.innerHTML = `<p class="text-xs text-red-400 mt-1">No scores found — paste one number per line.</p>`; resultEl.classList.remove('hidden'); return; }
+  btnEl.textContent = 'Fetching tracklist…'; btnEl.disabled = true;
+  const title = ctx === 'ranking'
+    ? (window._rankingAlbum?.title || window._rankingAlbum?.album_title || '')
+    : (el('add-title')||{}).value.trim();
+  const artist = ctx === 'ranking'
+    ? (window._rankingAlbum?.artist || '')
+    : (el('add-artist')||{}).value.trim();
+  const tracks = await fetchTracklist(title, artist);
+  btnEl.textContent = 'Calculate Average →'; btnEl.disabled = false;
+  const avg = scores.reduce((a,b) => a+b, 0) / scores.length;
+  const rounded = Math.round(avg);
+  let rowsHtml = scores.map((score, i) => {
+    const name = tracks && tracks[i] ? tracks[i].name : `Track ${i+1}`;
+    return `<div class="flex justify-between items-center text-xs py-1.5" style="border-bottom:1px solid rgba(255,255,255,0.05)">
+      <span class="text-gray-300">${name}</span>
+      <span class="font-bold" style="color:var(--at)">${score}/10</span>
+    </div>`;
+  }).join('');
+  resultEl.innerHTML = `
+    <div class="rounded-xl overflow-hidden border border-white/10 mt-2" style="background:rgba(255,255,255,0.03)">
+      <div class="p-3">${rowsHtml}</div>
+      <div class="flex items-center justify-between px-3 py-2" style="background:rgba(255,255,255,0.06)">
+        <span class="text-sm font-bold text-white">Average</span>
+        <span class="text-lg font-black" style="color:var(--a)">${avg.toFixed(1)}/10</span>
+      </div>
+    </div>
+    <button class="btn-amber w-full mt-2 text-sm" onclick="applyTrackAverage(${rounded},'${ctx}')">Use ${rounded}/10 as my rating →</button>`;
+  resultEl.classList.remove('hidden');
+}
+
+function applyTrackAverage(score, ctx) {
+  if (ctx === 'ranking') selectScore(score);
+  else setAddRating(score);
+  _trackRatingsOpen[ctx] = true;
+  toggleTrackRatings(ctx); // close panel
+}
+
 // ─── QUEUE PAGE ──────────────────────────────────────────────────────────────
 async function renderQueue() {
   const list = await getAlbumList();
@@ -3359,6 +3510,7 @@ async function renderRanking() {
           ${[['Yes','bg-green-500/15 border-green-500/30 text-green-300'],['No','bg-red-500/15 border-red-500/30 text-red-300'],['Maybe','bg-amber-500/15 border-purple-500/30 text-purple-300']].map(([v,c])=>`<button class="flex-1 py-2 rounded-lg border border-purple-900/40 text-gray-400 text-sm font-medium hover:border-purple-500/40 transition-all" onclick="selectReplay('${v}')" id="replay-${v.toLowerCase()}">${v}</button>`).join('')}
         </div>
       </div>
+      ${trackRatingsSectionHtml('ranking')}
       <button class="btn-amber" id="rank-submit" onclick="submitRanking()" disabled>Submit Rating</button>
     </div>
   </div>`;
