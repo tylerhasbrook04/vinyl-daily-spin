@@ -3041,9 +3041,19 @@ async function renderStats() {
 // ─── ADD ALBUM PAGE ──────────────────────────────────────────────────────────
 async function renderAdd() {
   return `<div class="p-6 max-w-lg mx-auto">
-    <h1 class="text-2xl font-bold text-white mb-6">Add Album</h1>
-    <div id="add-success" class="hidden mb-4 p-4 bg-green-500/15 border border-green-500/20 rounded-xl text-green-300 text-sm">Album added to your queue!</div>
+    <h1 class="text-2xl font-bold text-white mb-4">Add Album</h1>
+
+    <!-- Mode toggle -->
+    <div class="flex gap-2 mb-5 p-1 rounded-xl" style="background:rgba(255,255,255,0.05)">
+      <button id="mode-queue-btn" onclick="setAddMode('queue')" class="flex-1 py-2 rounded-lg text-sm font-medium transition-all" style="background:var(--a);color:#000">📋 Add to Queue</button>
+      <button id="mode-rate-btn" onclick="setAddMode('rate')" class="flex-1 py-2 rounded-lg text-sm font-medium transition-all text-gray-400">⭐ Add & Rate</button>
+    </div>
+
+    <div id="add-success-queue" class="hidden mb-4 p-4 bg-green-500/15 border border-green-500/20 rounded-xl text-green-300 text-sm">✅ Album added to your queue!</div>
+    <div id="add-success-rate" class="hidden mb-4 p-4 bg-green-500/15 border border-green-500/20 rounded-xl text-green-300 text-sm">✅ Album rated and added to your library!</div>
+
     <div class="card flex flex-col gap-4">
+      <!-- Shared fields -->
       <div><label class="text-sm text-gray-400 mb-1 block">Album Title *</label><input class="input" id="add-title" placeholder="Dark Side of the Moon" oninput="checkAddAlbumWarning()"/></div>
       <div><label class="text-sm text-gray-400 mb-1 block">Artist *</label><input class="input" id="add-artist" placeholder="Pink Floyd" oninput="checkAddAlbumWarning()"/></div>
       <div id="add-warning" class="hidden text-xs text-amber-400"></div>
@@ -3052,9 +3062,132 @@ async function renderAdd() {
         <input class="input" id="add-art-url" placeholder="https://i.scdn.co/image/... or any image URL"/>
         <p class="text-xs text-gray-600 mt-1">Paste any direct image link. Right-click an album cover online → Copy Image Address.</p>
       </div>
+
+      <!-- Rate fields (hidden in queue mode) -->
+      <div id="add-rate-fields" class="hidden flex flex-col gap-4">
+        <div style="border-top:1px solid rgba(255,255,255,0.06);margin:0 -4px"></div>
+        <div>
+          <label class="text-sm text-gray-400 mb-2 block">Rating * <span id="add-rating-display" class="text-white font-bold ml-1"></span></label>
+          <div class="flex gap-1 flex-wrap" id="add-rating-btns">
+            ${[1,2,3,4,5,6,7,8,9,10].map(n=>`<button onclick="setAddRating(${n})" class="add-rating-btn w-9 h-9 rounded-lg text-sm font-bold transition-all" style="background:rgba(255,255,255,0.07);color:#9ca3af">${n}</button>`).join('')}
+          </div>
+          <input type="hidden" id="add-rating" value=""/>
+        </div>
+        <div><label class="text-sm text-gray-400 mb-1 block">Date Listened <span class="text-gray-600">(optional)</span></label><input class="input" id="add-date" type="date"/></div>
+        <div><label class="text-sm text-gray-400 mb-1 block">Favorite Track <span class="text-gray-600">(optional)</span></label><input class="input" id="add-track" placeholder="e.g. Time"/></div>
+        <div><label class="text-sm text-gray-400 mb-1 block">Review <span class="text-gray-600">(optional)</span></label><textarea class="input" id="add-review" rows="3" placeholder="What did you think?"></textarea></div>
+        <div>
+          <label class="text-sm text-gray-400 mb-2 block">Mood Tag <span class="text-gray-600">(optional)</span></label>
+          <div class="flex flex-wrap gap-2" id="add-mood-btns">
+            ${['Chill','Energetic','Melancholy','Uplifting','Intense','Nostalgic','Focus','Party'].map(m=>`<button onclick="toggleAddMood('${m}')" class="add-mood-btn px-3 py-1 rounded-full text-xs transition-all" style="background:rgba(255,255,255,0.07);color:#9ca3af">${m}</button>`).join('')}
+          </div>
+          <input type="hidden" id="add-mood" value=""/>
+        </div>
+        <div>
+          <label class="text-sm text-gray-400 mb-2 block">Would Replay? <span class="text-gray-600">(optional)</span></label>
+          <div class="flex gap-2">
+            <button onclick="setAddReplay('Yes')" id="add-replay-yes" class="flex-1 py-2 rounded-lg text-sm transition-all" style="background:rgba(255,255,255,0.07);color:#9ca3af">👍 Yes</button>
+            <button onclick="setAddReplay('No')" id="add-replay-no" class="flex-1 py-2 rounded-lg text-sm transition-all" style="background:rgba(255,255,255,0.07);color:#9ca3af">👎 No</button>
+          </div>
+          <input type="hidden" id="add-replay" value=""/>
+        </div>
+      </div>
+
       <button class="btn-amber mt-2" id="add-submit" onclick="submitAddAlbum()">Add to Queue</button>
     </div>
   </div>`;
+}
+
+let _addMode = 'queue';
+function setAddMode(mode) {
+  _addMode = mode;
+  const rateFields = document.getElementById('add-rate-fields');
+  const submitBtn = document.getElementById('add-submit');
+  const queueBtn = document.getElementById('mode-queue-btn');
+  const rateBtn = document.getElementById('mode-rate-btn');
+  if (mode === 'rate') {
+    rateFields.classList.remove('hidden');
+    submitBtn.textContent = 'Add & Rate';
+    submitBtn.onclick = submitAddAndRate;
+    queueBtn.style.background = 'rgba(255,255,255,0.07)'; queueBtn.style.color = '#9ca3af';
+    rateBtn.style.background = 'var(--a)'; rateBtn.style.color = '#000';
+    // Pre-fill today's date
+    const dateEl = document.getElementById('add-date');
+    if (dateEl && !dateEl.value) dateEl.value = today();
+  } else {
+    rateFields.classList.add('hidden');
+    submitBtn.textContent = 'Add to Queue';
+    submitBtn.onclick = submitAddAlbum;
+    queueBtn.style.background = 'var(--a)'; queueBtn.style.color = '#000';
+    rateBtn.style.background = 'rgba(255,255,255,0.07)'; rateBtn.style.color = '#9ca3af';
+  }
+}
+function setAddRating(n) {
+  document.getElementById('add-rating').value = n;
+  document.getElementById('add-rating-display').textContent = `${n}/10`;
+  document.querySelectorAll('.add-rating-btn').forEach((b,i) => {
+    const active = i+1 <= n;
+    b.style.background = active ? 'var(--a)' : 'rgba(255,255,255,0.07)';
+    b.style.color = active ? '#000' : '#9ca3af';
+  });
+}
+function toggleAddMood(mood) {
+  const cur = document.getElementById('add-mood').value;
+  const next = cur === mood ? '' : mood;
+  document.getElementById('add-mood').value = next;
+  document.querySelectorAll('.add-mood-btn').forEach(b => {
+    const active = b.textContent === next;
+    b.style.background = active ? 'var(--a)' : 'rgba(255,255,255,0.07)';
+    b.style.color = active ? '#000' : '#9ca3af';
+  });
+}
+function setAddReplay(val) {
+  document.getElementById('add-replay').value = val;
+  document.getElementById('add-replay-yes').style.background = val === 'Yes' ? 'var(--a)' : 'rgba(255,255,255,0.07)';
+  document.getElementById('add-replay-yes').style.color = val === 'Yes' ? '#000' : '#9ca3af';
+  document.getElementById('add-replay-no').style.background = val === 'No' ? 'var(--a)' : 'rgba(255,255,255,0.07)';
+  document.getElementById('add-replay-no').style.color = val === 'No' ? '#000' : '#9ca3af';
+}
+async function submitAddAndRate() {
+  const title = (el('add-title')||{}).value.trim();
+  const artist = (el('add-artist')||{}).value.trim();
+  const artUrl = (el('add-art-url')||{}).value.trim();
+  const rating = (el('add-rating')||{}).value;
+  const date = (el('add-date')||{}).value || today();
+  const track = (el('add-track')||{}).value.trim();
+  const review = (el('add-review')||{}).value.trim();
+  const mood = (el('add-mood')||{}).value;
+  const replay = (el('add-replay')||{}).value;
+  if (!title || !artist) { alert('Album title and artist are required.'); return; }
+  if (!rating) { alert('Please select a rating.'); return; }
+  const btn = el('add-submit'); btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    await db_addAlbum({
+      AlbumTitle: title,
+      Artist: artist,
+      Rating: String(rating),
+      DateAssigned: date,
+      Status: 'Completed',
+      PickedByMe: 'TRUE',
+      FavoriteTrack: track,
+      Review: review,
+      MoodTag: mood,
+      WouldReplay: replay,
+      ArtUrl: artUrl,
+    });
+    if (artUrl) _artCache[`${title}|${artist}`] = artUrl;
+    el('add-success-rate').classList.remove('hidden');
+    ['add-title','add-artist','add-art-url','add-track','add-review'].forEach(id=>{ const e=el(id); if(e)e.value=''; });
+    el('add-rating').value = ''; el('add-mood').value = ''; el('add-replay').value = '';
+    document.getElementById('add-rating-display').textContent = '';
+    document.querySelectorAll('.add-rating-btn').forEach(b=>{ b.style.background='rgba(255,255,255,0.07)'; b.style.color='#9ca3af'; });
+    document.querySelectorAll('.add-mood-btn').forEach(b=>{ b.style.background='rgba(255,255,255,0.07)'; b.style.color='#9ca3af'; });
+    ['add-replay-yes','add-replay-no'].forEach(id=>{ const e=el(id); if(e){e.style.background='rgba(255,255,255,0.07)';e.style.color='#9ca3af';} });
+    document.getElementById('add-date').value = today();
+    setTimeout(()=>el('add-success-rate') && el('add-success-rate').classList.add('hidden'), 4000);
+    window._libraryAlbums = null; // force reload next visit
+  } catch(e) { alert('Error: ' + e.message); }
+  btn.disabled = false; btn.textContent = 'Add & Rate';
 }
 
 // Non-blocking heads-up only — never prevents adding the album. Catches the kind of stray
@@ -3108,10 +3241,10 @@ async function submitAddAlbum() {
     await addToAlbumList(title, artist, artUrl);
     if (artUrl) _artCache[`${title}|${artist}`] = artUrl;
     try { const qd=JSON.parse(localStorage.getItem('vds_queue_dates')||'{}'); qd[`${title}|${artist}`]=today(); localStorage.setItem('vds_queue_dates',JSON.stringify(qd)); } catch(e) {}
-    el('add-success').classList.remove('hidden');
+    el('add-success-queue').classList.remove('hidden');
     ['add-title','add-artist','add-art-url'].forEach(id=>{ const e=el(id); if(e)e.value=''; });
     if (el('add-warning')) el('add-warning').classList.add('hidden');
-    setTimeout(()=>el('add-success') && el('add-success').classList.add('hidden'),4000);
+    setTimeout(()=>el('add-success-queue') && el('add-success-queue').classList.add('hidden'),4000);
   } catch(e) { alert('Error: '+e.message); }
   btn.disabled=false; btn.textContent='Add to Queue';
 }
